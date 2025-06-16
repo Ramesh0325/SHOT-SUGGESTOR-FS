@@ -16,12 +16,14 @@ from db import (
     create_project, get_user_projects, get_project, delete_project,
     save_shot, get_project_shots, get_shot, delete_shot,
     save_session, list_user_sessions, get_session_data, rename_session, delete_session,
-    get_db_connection
+    get_db_connection, save_shot_version, get_shot_versions, close_db_connection
 )
 from model import gemini, generate_shot_image
 import json
 from dotenv import load_dotenv
 import sqlite3
+import atexit
+import contextlib
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -55,12 +57,25 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Frontend URL
-    allow_credentials=True,  # Important for cookies/auth
+    allow_origins=["http://localhost:3000"],  # (or ["*"] for development)
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
 )
+
+# Add OPTIONS endpoint for CORS preflight
+@app.options("/{full_path:path}")
+async def options_handler(request: Request, full_path: str):
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Max-Age": "3600"
+        }
+    )
 
 # Pydantic models for request/response validation
 class Token(BaseModel):
@@ -146,26 +161,32 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
+        logger.debug(f"Validating token: {token[:10]}...")
         # Decode the JWT token
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
+            logger.error("Token missing username")
             raise credentials_exception
         token_data = TokenData(username=username)
+    except jwt.ExpiredSignatureError:
+        logger.error("Token has expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     except JWTError as e:
-        if isinstance(e, jwt.ExpiredSignatureError):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has expired",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+        logger.error(f"JWT validation error: {str(e)}")
         raise credentials_exception
         
     # Get user from database
     user = get_user_by_username(username=token_data.username)
     if user is None:
+        logger.error(f"User {token_data.username} not found in database")
         raise credentials_exception
         
+    logger.info(f"Successfully authenticated user {user['username']}")
     return user
 
 # Root endpoint
@@ -176,28 +197,43 @@ async def root():
 # Authentication endpoints
 @app.post("/token")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+    """Login endpoint to get access token"""
+    try:
+        logger.info(f"Login attempt for user {form_data.username}")
+        user = authenticate_user(form_data.username, form_data.password)
+        if not user:
+            logger.warning(f"Failed login attempt for user {form_data.username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user["username"]}, expires_delta=access_token_expires
         )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user["username"]}, expires_delta=access_token_expires
-    )
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {
-            "id": user["id"],
-            "username": user["username"],
-            "email": user.get("email"),
-            "full_name": user.get("full_name"),
-            "disabled": user.get("disabled", False)
+        
+        logger.info(f"Successful login for user {user['username']}")
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user["id"],
+                "username": user["username"],
+                "email": user.get("email"),
+                "full_name": user.get("full_name"),
+                "disabled": user.get("disabled", False)
+            }
         }
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during login: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred during login"
+        )
 
 @app.post("/register", response_model=UserResponse)
 async def register(user: UserCreate):
@@ -274,27 +310,18 @@ async def register(user: UserCreate):
             }
         )
 
-@app.get("/me", response_model=UserResponse)
-async def get_me(current_user: dict = Depends(get_current_user)):
-    user = get_user_by_username(username=current_user["username"])
-    if not user:
+@app.get("/me")
+async def read_users_me(current_user: dict = Depends(get_current_user)):
+    """Get current user information"""
+    try:
+        logger.info(f"User {current_user['username']} requesting their info")
+        return current_user
+    except Exception as e:
+        logger.error(f"Error getting user info: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get user information"
         )
-    return JSONResponse(
-        content={
-            "id": user["id"],
-            "username": user["username"],
-            "email": user.get("email"),
-            "full_name": user.get("full_name"),
-            "disabled": user.get("disabled", False)
-        },
-        headers={
-            "Access-Control-Allow-Origin": FRONTEND_URL,
-            "Access-Control-Allow-Credentials": "true"
-        }
-    )
 
 # Project endpoints
 @app.post("/projects", response_model=ProjectResponse)
@@ -370,21 +397,98 @@ async def get_project_details(
 
 @app.delete("/projects/{project_id}")
 async def remove_project(
+    request: Request,
     project_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    project = get_project(project_id)
-    if not project or project["user_id"] != current_user["id"]:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found"
+    try:
+        logger.info(f"Attempting to delete project {project_id} for user {current_user['id']}")
+        
+        # Add CORS headers for preflight
+        if request.method == "OPTIONS":
+            return JSONResponse(
+                content={},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+
+        # Get project details
+        project = get_project(project_id)
+        logger.debug(f"Retrieved project: {project}")
+        
+        if not project:
+            logger.warning(f"Project {project_id} not found")
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"detail": "Project not found"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+            
+        if project["user_id"] != current_user["id"]:
+            logger.warning(f"User {current_user['id']} not authorized to delete project {project_id}")
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": "Not authorized to delete this project"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # Delete the project
+        logger.info(f"Deleting project {project_id}")
+        try:
+            # First verify the project still exists
+            project_exists = get_project(project_id)
+            if not project_exists:
+                logger.warning(f"Project {project_id} was deleted between verification and deletion")
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"detail": "Project was already deleted"},
+                    headers={
+                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Credentials": "true"
+                    }
+                )
+
+            # Delete project and all its shots
+            delete_project(project_id)
+            logger.info(f"Successfully deleted project {project_id}")
+            
+            return JSONResponse(
+                content={"message": "Project deleted successfully"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+            
+        except sqlite3.Error as e:
+            logger.error(f"Database error while deleting project {project_id}: {str(e)}")
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"detail": f"Database error: {str(e)}"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+            
+    except Exception as e:
+        logger.error(f"Unexpected error deleting project {project_id}: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": f"Error deleting project: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
         )
-    if delete_project(project_id):
-        return {"message": "Project deleted successfully"}
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Failed to delete project"
-    )
 
 # Shot suggestion and image generation endpoints
 @app.post("/shots/suggest")
@@ -414,106 +518,175 @@ async def suggest_shots(
             detail=str(e)
         )
 
-@app.post("/shots/generate-image")
-async def generate_image(
-    shot_description: str = Form(...),
-    model_name: str = Form(...),
-    reference_image: Optional[UploadFile] = File(None),
-    current_user: dict = Depends(get_current_user)
-):
-    try:
-        # Generate image using the model
-        image_url = generate_shot_image(
-            prompt=shot_description,
-            model_name=model_name,
-            reference_image=reference_image.file if reference_image else None
-        )
-        return {"image_url": image_url}
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
-# Shot management endpoints
-@app.post("/projects/{project_id}/shots", response_model=ShotResponse)
+@app.post("/projects/{project_id}/shots")
 async def create_shot(
     project_id: str,
     shot_number: int = Form(...),
     scene_description: str = Form(...),
     shot_description: str = Form(...),
     model_name: str = Form(...),
-    image_url: Optional[str] = Form(None),
     metadata: UploadFile = File(None),
     current_user: dict = Depends(get_current_user)
 ):
     """Create a new shot in a project"""
     try:
-        # Verify project ownership
+        # Verify project ownership and existence
+        with get_db_connection() as conn:
+            project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found (or deleted).")
         project = get_project(project_id)
         if not project or project["user_id"] != current_user["id"]:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found"
-            )
-        
-        # Read and parse metadata blob if provided
+            raise HTTPException(status_code=404, detail="Project not found (or deleted).")
+
+        # Parse metadata if provided
         metadata_dict = None
+        user_input = None
         if metadata:
             try:
-                content = await metadata.read()
-                metadata_dict = json.loads(content.decode())
-                # Validate metadata structure
-                required_fields = ['camera_angle', 'camera_movement', 'framing']
-                if not all(field in metadata_dict for field in required_fields):
-                    raise ValueError("Missing required metadata fields")
+                metadata_content = await metadata.read()
+                metadata_dict = json.loads(metadata_content)
+                user_input = {
+                    "shot_description": shot_description,
+                    "model_name": model_name,
+                    "timestamp": datetime.now().isoformat()
+                }
             except json.JSONDecodeError:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid metadata format"
+                    detail="Invalid metadata JSON"
                 )
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=str(e)
+
+        try:
+            # Save the shot and create initial version
+            logger.info("Attempting to save shot to database")
+            with get_db_connection() as conn:
+                shot_id = save_shot(
+                    project_id=project_id,
+                    shot_number=shot_number,
+                    scene_description=scene_description,
+                    shot_description=shot_description,
+                    model_name=model_name,
+                    metadata=metadata_dict,
+                    user_input=user_input
                 )
-        
-        # Save shot to database
-        shot_id = save_shot(
-            project_id=project_id,
-            shot_number=shot_number,
-            scene_description=scene_description,
-            shot_description=shot_description,
-            model_name=model_name,
-            image_url=image_url,
-            metadata=metadata_dict
-        )
-        
-        if not shot_id:
+
+                if not shot_id:
+                    logger.error("Failed to save shot - save_shot returned None")
+                    raise HTTPException(status_code=500, detail="Failed to save shot to database")
+
+                logger.info(f"Successfully created shot {shot_id}")
+                return {"id": shot_id, "message": "Shot created successfully"}
+
+        except sqlite3.Error as db_error:
+            logger.error(f"Database error while saving shot: {str(db_error)}", exc_info=True)
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to save shot"
+                status_code=500,
+                detail=f"Database error: {str(db_error)}"
             )
-            
-        # Get and return the created shot
-        shot = get_shot(shot_id)
-        if not shot:
+        except Exception as db_error:
+            logger.error(f"Unexpected error while saving shot: {str(db_error)}", exc_info=True)
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to retrieve created shot"
+                status_code=500,
+                detail=f"Error saving shot: {str(db_error)}"
             )
-            
-        return shot
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating shot: {str(e)}")
+        logger.error(f"Unexpected error creating shot: {str(e)}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=f"Error creating shot: {str(e)}"
         )
 
+@app.post("/shots/generate-image")
+async def generate_shot_image(
+    shot_description: str = Form(...),
+    model_name: str = Form(...),
+    shot_id: str = Form(None),
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        # Generate the image
+        image_data = generate_shot_image(
+            prompt=shot_description,
+            model_name=model_name
+        )
+
+        if shot_id:
+            # Get current shot
+            shot = get_shot(shot_id)
+            if not shot:
+                raise HTTPException(status_code=404, detail="Shot not found")
+            if get_project(shot["project_id"])["user_id"] != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Not authorized to modify this shot")
+
+            # Create new version
+            version_number = shot.get("version_number", 0) + 1
+            version_id = save_shot_version(
+                shot_id=shot_id,
+                version_number=version_number,
+                scene_description=shot["scene_description"],
+                shot_description=shot_description,
+                model_name=model_name,
+                image_url=image_data,
+                metadata=shot.get("metadata"),
+                user_input={
+                    "shot_description": shot_description,
+                    "model_name": model_name,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+
+            if not version_id:
+                raise HTTPException(status_code=500, detail="Failed to save shot version")
+
+            # Update shot with new version
+            conn = get_db_connection()
+            conn.execute(
+                """
+                UPDATE shots 
+                SET version_number = ?, image_url = ?
+                WHERE id = ?
+                """,
+                (version_number, image_data, shot_id)
+            )
+            conn.commit()
+            conn.close()
+
+        return {"image_url": image_data}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating image: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/shots/{shot_id}/versions")
+async def get_shot_versions(
+    shot_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        # Verify shot exists and user has access
+        shot = get_shot(shot_id)
+        if not shot:
+            raise HTTPException(status_code=404, detail="Shot not found")
+        if get_project(shot["project_id"])["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized to view this shot")
+
+        # Get all versions
+        versions = get_shot_versions(shot_id)
+        return versions
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting shot versions: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Shot management endpoints
 @app.get("/projects/{project_id}/shots", response_model=List[ShotResponse])
 async def list_project_shots(
     project_id: str,
@@ -530,30 +703,122 @@ async def list_project_shots(
 
 @app.delete("/shots/{shot_id}")
 async def remove_shot(
+    request: Request,
     shot_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    shot = get_shot(shot_id)
-    if not shot:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Shot not found"
+    try:
+        logger.info(f"Attempting to delete shot {shot_id} for user {current_user['id']}")
+        
+        # Add CORS headers for preflight
+        if request.method == "OPTIONS":
+            return JSONResponse(
+                content={},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+
+        # Get shot details
+        shot = get_shot(shot_id)
+        logger.debug(f"Retrieved shot: {shot}")
+        
+        if not shot:
+            logger.warning(f"Shot {shot_id} not found")
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"detail": "Shot not found"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # Verify project ownership
+        project = get_project(shot["project_id"])
+        logger.debug(f"Retrieved project: {project}")
+        
+        if not project:
+            logger.warning(f"Project {shot['project_id']} not found for shot {shot_id}")
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"detail": "Project not found"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+            
+        if project["user_id"] != current_user["id"]:
+            logger.warning(f"User {current_user['id']} not authorized to delete shot {shot_id} from project {project['id']}")
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": "Not authorized to delete this shot"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # Delete the shot
+        logger.info(f"Deleting shot {shot_id} from project {project['id']}")
+        try:
+            # First verify the shot still exists
+            shot_exists = get_shot(shot_id)
+            if not shot_exists:
+                logger.warning(f"Shot {shot_id} was deleted between verification and deletion")
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"detail": "Shot was already deleted"},
+                    headers={
+                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Credentials": "true"
+                    }
+                )
+
+            # Attempt deletion
+            success = delete_shot(shot_id)
+            if success:
+                logger.info(f"Successfully deleted shot {shot_id}")
+                return JSONResponse(
+                    content={"message": "Shot deleted successfully"},
+                    headers={
+                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Credentials": "true"
+                    }
+                )
+            else:
+                logger.error(f"Failed to delete shot {shot_id} - delete_shot returned False")
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"detail": "Failed to delete shot from database"},
+                    headers={
+                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Credentials": "true"
+                    }
+                )
+        except sqlite3.Error as e:
+            logger.error(f"Database error while deleting shot {shot_id}: {str(e)}")
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"detail": f"Database error: {str(e)}"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+            
+    except Exception as e:
+        logger.error(f"Unexpected error deleting shot {shot_id}: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": f"Error deleting shot: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
         )
-    
-    # Verify project ownership
-    project = get_project(shot["project_id"])
-    if not project or project["user_id"] != current_user["id"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to delete this shot"
-        )
-    
-    if delete_shot(shot_id):
-        return {"message": "Shot deleted successfully"}
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Failed to delete shot"
-    )
 
 @app.put("/projects/{project_id}/shots/{shot_id}", response_model=ShotResponse)
 async def update_shot(
@@ -681,9 +946,20 @@ async def remove_session(
         detail="Failed to delete session"
     )
 
-# Initialize database on startup
+# Register cleanup handler
+@atexit.register
+def cleanup():
+    """Cleanup database connection on shutdown"""
+    close_db_connection()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on FastAPI shutdown"""
+    close_db_connection()
+
 @app.on_event("startup")
 async def startup_event():
+    """Initialize database on startup"""
     init_db()
 
 if __name__ == "__main__":
