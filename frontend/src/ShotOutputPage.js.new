@@ -65,6 +65,7 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
       fetchSessionData();
     }
   };
+  
   const fetchSessionData = async () => {
     try {
       setLoading(true);
@@ -151,7 +152,8 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
           isGeneratingImage: false 
         };
         setSessionData({ ...sessionData, shots: updatedShotsWithImage });
-          // Show success notification with persistence info
+        
+        // Show success notification with persistence info
         const successMessage = sessionId ? 
           'Image generated and saved successfully! It will persist across page refreshes.' : 
           'Image generated successfully!';
@@ -243,7 +245,8 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
 
   // Otherwise render the standalone page view
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Typography variant="h4" component="h1" gutterBottom>
           Shot Output
         </Typography>
@@ -274,7 +277,8 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
 
         <Typography variant="h6" gutterBottom>
           Shot Suggestions
-        </Typography>        <Grid container spacing={3}>
+        </Typography>
+        <Grid container spacing={3}>
           {sessionData.shots && sessionData.shots.length > 0 ? (
             sessionData.shots.map((shot, index) => (
               <Grid item xs={12} key={index}>
@@ -331,7 +335,8 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
                               justifyContent: 'center',
                               position: 'relative'
                             }}
-                          >                            <CardMedia
+                          >
+                            <CardMedia
                               component="img"
                               sx={{ 
                                 height: '100%', 
@@ -400,11 +405,13 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
             ))
           ) : (
             <Grid item xs={12}>
-              <Typography>No shot data available</Typography>            </Grid>
+              <Typography>No shot data available</Typography>
+            </Grid>
           )}
         </Grid>
       </Paper>
-        {/* Feedback Snackbar */}
+      
+      {/* Feedback Snackbar */}
       <Snackbar
         open={snackbarOpen}
         autoHideDuration={6000}
@@ -452,7 +459,8 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
             onClick={() => setFullscreenImage(null)}
           >
             ×
-          </Box>          <Box sx={{ maxWidth: '90%', maxHeight: '90%', overflow: 'auto' }}>
+          </Box>
+          <Box sx={{ maxWidth: '90%', maxHeight: '90%', overflow: 'auto' }}>
             {fullscreenImage && (
               <img
                 src={fullscreenImage}
@@ -469,7 +477,8 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
                 }}
               />
             )}
-          </Box>        </Box>
+          </Box>
+        </Box>
       )}
     </Container>
   );

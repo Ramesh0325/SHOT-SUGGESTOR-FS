@@ -31,8 +31,7 @@ def get_db_connection():
             # Initialize the connection pool
             _connection_pool = sqlite3.connect(DB_FILE, timeout=60.0)
             _connection_pool.row_factory = sqlite3.Row
-            
-            # Set pragmas for better concurrency
+              # Set pragmas for better concurrency
             _connection_pool.execute("PRAGMA busy_timeout = 60000")  # 60 second timeout
             _connection_pool.execute("PRAGMA journal_mode = DELETE")  # Use DELETE journal mode
             _connection_pool.execute("PRAGMA synchronous = NORMAL")
@@ -642,6 +641,108 @@ def delete_session(user_id, session_name):
         print(f"Error deleting session: {e}")
         return False
 
+def list_file_system_sessions(user_id):
+    """Get all sessions for a user from the filesystem"""
+    try:
+        user_folder = os.path.join(SESSIONS_ROOT, str(user_id))
+        if not os.path.exists(user_folder):
+            return []
+        
+        sessions = []
+        # Get all session directories
+        for session_dir in os.listdir(user_folder):
+            session_path = os.path.join(user_folder, session_dir)
+            if os.path.isdir(session_path):
+                for folder in os.listdir(session_path):
+                    if folder.startswith('session_'):
+                        session_full_path = os.path.join(session_path, folder)
+                        # Get input.json and shots.json if they exist
+                        input_path = os.path.join(session_full_path, 'input.json')
+                        shots_path = os.path.join(session_full_path, 'shots.json')
+                        
+                        # Parse date from session folder name (e.g., session_20250612_165228_b967451b)
+                        try:
+                            date_part = folder.split('_')[1:3]  # Get date and time parts
+                            date_str = f"{date_part[0][:4]}-{date_part[0][4:6]}-{date_part[0][6:]} {date_part[1][:2]}:{date_part[1][2:4]}:{date_part[1][4:]}"
+                            created_at = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").isoformat()
+                        except (IndexError, ValueError):
+                            created_at = datetime.now().isoformat()
+                            
+                        session = {
+                            "id": folder,
+                            "name": folder,
+                            "folder_path": session_full_path,
+                            "created_at": created_at,
+                            "updated_at": created_at,
+                            "type": "filesystem",
+                            "has_input": os.path.exists(input_path),
+                            "has_shots": os.path.exists(shots_path)
+                        }
+                        sessions.append(session)
+        
+        # Sort by date (newest first)
+        sessions.sort(key=lambda x: x['created_at'], reverse=True)
+        return sessions
+    except Exception as e:
+        print(f"Error listing filesystem sessions: {e}")
+        return []
+
+def get_filesystem_session_data(user_id, session_id):
+    """Get session data from filesystem by id"""
+    try:
+        # Find the session folder
+        user_folder = os.path.join(SESSIONS_ROOT, str(user_id))
+        if not os.path.exists(user_folder):
+            return None
+            
+        # Search in all project folders
+        for project_dir in os.listdir(user_folder):
+            project_path = os.path.join(user_folder, project_dir)
+            if os.path.isdir(project_path):
+                session_path = None
+                
+                # Check if this session exists in this project folder
+                for folder in os.listdir(project_path):
+                    if folder == session_id:
+                        session_path = os.path.join(project_path, folder)
+                        break
+                
+                if session_path:
+                    # Get input.json and shots.json if they exist
+                    input_path = os.path.join(session_path, 'input.json')
+                    shots_path = os.path.join(session_path, 'shots.json')
+                    
+                    data = {}
+                    if os.path.exists(input_path):
+                        with open(input_path, 'r') as f:
+                            data['input'] = json.load(f)
+                    
+                    if os.path.exists(shots_path):
+                        with open(shots_path, 'r') as f:
+                            data['shots'] = json.load(f)
+                      # Parse date from session folder name
+                    try:
+                        date_part = session_id.split('_')[1:3]
+                        date_str = f"{date_part[0][:4]}-{date_part[0][4:6]}-{date_part[0][6:]} {date_part[1][:2]}:{date_part[1][2:4]}:{date_part[1][4:]}"
+                        created_at = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").isoformat()
+                    except (IndexError, ValueError):
+                        created_at = datetime.now().isoformat()
+                    
+                    return {
+                        "id": session_id,
+                        "name": session_id,
+                        "folder_path": session_path,
+                        "created_at": created_at,
+                        "updated_at": created_at,
+                        "type": "filesystem",
+                        "data": data
+                    }
+        
+        return None
+    except Exception as e:
+        print(f"Error getting filesystem session data: {e}")
+        return None
+
 # Initialize the database on import
 init_db()
 
@@ -742,4 +843,128 @@ def get_shot_versions(shot_id):
             return version_list
     except sqlite3.Error as e:
         print(f"Error getting shot versions: {e}")
+        return []
+
+def save_shots_to_filesystem(user_id, session_data, shots_data, project_id=None):
+    """
+    Save shots data to the filesystem in the user's session directory
+    
+    Args:
+        user_id: The ID of the user
+        session_data: Dictionary with scene_description, num_shots, model_name
+        shots_data: List of shot suggestions
+        project_id: Optional project ID to associate this session with 
+    
+    Returns:
+        Dictionary with session_id and folder_path if successful, None if failed
+    """
+    try:
+        # Create a unique session ID with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_id = f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
+        
+        # Create user directory if it doesn't exist
+        user_dir = os.path.join(SESSIONS_ROOT, str(user_id))
+        os.makedirs(user_dir, exist_ok=True)
+        
+        # If no specific project is provided, try to use the active project from session_data
+        if not project_id and isinstance(session_data, dict) and "project_id" in session_data:
+            project_id = session_data["project_id"]
+            
+        # If still no project_id, create a default one based on timestamp
+        if not project_id:
+            # Find or create a project folder (using a timestamp to make it unique)
+            project_id = f"project_{timestamp[:8]}"  # Use date part only
+            
+        # Create the project directory
+        project_dir = os.path.join(user_dir, project_id)
+        os.makedirs(project_dir, exist_ok=True)
+        
+        # Create session directory
+        session_dir = os.path.join(project_dir, session_id)
+        os.makedirs(session_dir, exist_ok=True)
+        
+        # Make sure session_data is a valid dictionary
+        if not isinstance(session_data, dict):
+            session_data = {"scene_description": str(session_data)}
+        
+        # Make sure shots_data is a valid list
+        if not isinstance(shots_data, list):
+            # If suggestions is an object with a suggestions property, extract that
+            if isinstance(shots_data, dict) and "suggestions" in shots_data:
+                shots_data = shots_data["suggestions"]
+            else:
+                shots_data = []
+          # Save input data
+        with open(os.path.join(session_dir, 'input.json'), 'w') as f:
+            json.dump(session_data, f, indent=2)
+        
+        # Save shots data
+        with open(os.path.join(session_dir, 'shots.json'), 'w') as f:
+            json.dump(shots_data, f, indent=2)
+            
+        print(f"Successfully saved session to {session_dir}")
+        
+        # Return success with path info
+        return {
+            "session_id": session_id,
+            "folder_path": session_dir
+        }
+        return {
+            "session_id": session_id,
+            "folder_path": session_dir
+        }
+    except Exception as e:
+        print(f"Error saving shots to filesystem: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def list_project_sessions(user_id, project_id):
+    """Get all sessions for a specific project from the filesystem"""
+    try:
+        project_folder = os.path.join(SESSIONS_ROOT, str(user_id), project_id)
+        if not os.path.exists(project_folder):
+            return []
+        
+        sessions = []
+        # Get all session directories in this project folder
+        for folder in os.listdir(project_folder):
+            if folder.startswith('session_'):
+                session_full_path = os.path.join(project_folder, folder)
+                if os.path.isdir(session_full_path):
+                    # Get input.json and shots.json if they exist
+                    input_path = os.path.join(session_full_path, 'input.json')
+                    shots_path = os.path.join(session_full_path, 'shots.json')
+                    
+                    # Parse date from session folder name (e.g., session_20250612_165228_b967451b)
+                    created_at = datetime.now().isoformat()
+                    
+                    # Try to extract date from session folder name
+                    try:
+                        date_part = folder.split('_')[1:3]  # Get date and time parts
+                        date_str = f"{date_part[0][:4]}-{date_part[0][4:6]}-{date_part[0][6:]} {date_part[1][:2]}:{date_part[1][2:4]}:{date_part[1][4:]}"
+                        created_at = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").isoformat()
+                    except (IndexError, ValueError) as e:
+                        print(f"Could not parse date from session name {folder}: {e}")
+                        # Keep using the default created_at
+                    
+                    session = {
+                        "id": folder,
+                        "name": folder,
+                        "folder_path": session_full_path,
+                        "created_at": created_at,
+                        "updated_at": created_at,
+                        "project_id": project_id,
+                        "type": "filesystem",
+                        "has_input": os.path.exists(input_path),
+                        "has_shots": os.path.exists(shots_path)
+                    }
+                    sessions.append(session)
+        
+        # Sort by date (newest first)
+        sessions.sort(key=lambda x: x['created_at'], reverse=True)
+        return sessions
+    except Exception as e:
+        print(f"Error listing project sessions: {e}")
         return []

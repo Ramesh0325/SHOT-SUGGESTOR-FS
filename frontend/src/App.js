@@ -9,6 +9,8 @@ import Register from './components/auth/Register';
 import Navbar from './components/layout/Navbar';
 import Projects from './components/projects/Projects';
 import ProjectDetail from './components/projects/ProjectDetail';
+import Sessions from './components/sessions/Sessions';
+import ShotOutputPage from './ShotOutputPage';
 
 // Create a theme instance
 const theme = createTheme({
@@ -118,13 +120,33 @@ const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     errorElement: <ErrorPage />
-  },
-  {
+  },  {
     path: '/projects/:projectId',
     element: (
       <ProtectedRoute>
         <Layout>
           <ProjectDetail />
+        </Layout>
+      </ProtectedRoute>
+    ),
+    errorElement: <ErrorPage />
+  },  {
+    path: '/sessions',
+    element: (
+      <ProtectedRoute>
+        <Layout>
+          <Sessions />
+        </Layout>
+      </ProtectedRoute>
+    ),
+    errorElement: <ErrorPage />
+  },
+  {
+    path: '/shot-output/:sessionId',
+    element: (
+      <ProtectedRoute>
+        <Layout>
+          <ShotOutputPage />
         </Layout>
       </ProtectedRoute>
     ),

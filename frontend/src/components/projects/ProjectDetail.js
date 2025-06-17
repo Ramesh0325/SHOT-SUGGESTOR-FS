@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Container,
   Typography,
@@ -29,8 +29,8 @@ import {
   Alert,
   DialogContentText,
   List,
-  ListItem,
-  ListItemText
+  ListItem,  ListItemText,
+  Snackbar
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -67,13 +67,23 @@ const ProjectDetail = () => {
   const [showVersions, setShowVersions] = useState({});
   const [shotVersions, setShotVersions] = useState({});
 
+  // Add state for sessions
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
+  const [selectedSession, setSelectedSession] = useState(null);
+
+  // Add state for a notification when sessions are saved
+  const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });
+  
   useEffect(() => {
     const fetchData = async () => {
       try {
         setError(null);
         setLoading(true);
         setShotsLoading(true);
-        await Promise.all([fetchProjectDetails(), fetchProjectShots()]);
+        setSessionsLoading(true);
+        await Promise.all([fetchProjectDetails(), fetchProjectShots(), fetchProjectSessions()]);
       } catch (err) {
         setError(err.message || 'Failed to load project details');
       } finally {
@@ -110,6 +120,28 @@ const ProjectDetail = () => {
     }
   };
 
+  // Add a useEffect to fetch sessions when projectId changes
+  useEffect(() => {
+    if (projectId) {
+      fetchProjectSessions();
+    }
+  }, [projectId]);
+
+  const fetchProjectSessions = async () => {
+    try {
+      setSessionsLoading(true);
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`http://localhost:8000/projects/${projectId}/sessions`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setSessions(response.data || []);
+    } catch (error) {
+      console.error('Error fetching project sessions:', error);
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
   const handleSuggestShots = async () => {
     if (!newShot.scene_description.trim()) {
       setError("Please enter a scene description");
@@ -131,7 +163,7 @@ const ProjectDetail = () => {
       
       // Get shot suggestions only (do not save to backend)
       const response = await axios.post(
-        "http://localhost:8000/shots/suggest",
+        `http://localhost:8000/shots/suggest?project_id=${projectId}`,
         {
           scene_description: newShot.scene_description,
           num_shots: newShot.num_shots,
@@ -143,13 +175,29 @@ const ProjectDetail = () => {
             'Content-Type': 'application/json'
           }
         }
-      );
-
-      if (response.data && Array.isArray(response.data)) {
+      );      if (response.data) {
         setLoadingStatus('Processing suggestions...');
         setLoadingProgress(60);
-        setSuggestedShots(response.data);
+        
+        // Handle both array and object with suggestions property formats
+        const suggestions = Array.isArray(response.data) 
+          ? response.data 
+          : (response.data.suggestions || []);
+          
+        setSuggestedShots(suggestions);
         setCurrentGenerationShots([]); // No saving, so no current generation shots
+          // Show session info if available
+        if (response.data.session_info) {
+          console.log('Session saved:', response.data.session_info);
+          setNotification({
+            open: true,
+            message: 'Shot suggestions saved to project session!',
+            severity: 'success'
+          });
+          // Refresh the sessions list
+          fetchProjectSessions();
+        }
+        
         setLoadingStatus('Finalizing...');
         setLoadingProgress(90);
         setOpen(false);
@@ -366,7 +414,7 @@ const ProjectDetail = () => {
         alert('No response from server. Please check your connection.');
       } else {
         // Something happened in setting up the request that triggered an Error
-        console.error('Error setting up request:', error.message);
+        console.error('Error setting up the request:', error.message);
         alert(`Error: ${error.message}`);
       }
     } finally {
@@ -458,6 +506,70 @@ const ProjectDetail = () => {
     } finally {
       setDeleteProjectDialogOpen(false);
       setProjectToDelete(null);
+    }
+  };
+
+  // Function to handle opening session details
+  const handleOpenSession = (session) => {
+    setSelectedSession(session);
+    setSessionDialogOpen(true);
+  };
+
+  // Function to close the notification
+  const handleCloseNotification = () => {
+    setNotification({ ...notification, open: false });
+  };
+
+  // Function to handle creating a new session
+  const handleCreateSession = async () => {
+    if (!selectedSession || !selectedSession.name) return;
+    
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      
+      // Create a blank session for this project
+      const response = await axios.post(
+        `http://localhost:8000/sessions`,
+        {
+          name: selectedSession.name,
+          data: {
+            input: {
+              project_id: projectId,
+              created_at: new Date().toISOString()
+            },
+            shots: []
+          }
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (response.data) {
+        // Show success notification
+        setNotification({
+          open: true,
+          message: 'New session created successfully!',
+          severity: 'success'
+        });
+        
+        // Close dialog and refresh sessions list
+        setSessionDialogOpen(false);
+        fetchProjectSessions();
+      }
+    } catch (error) {
+      console.error('Error creating session:', error);
+      setNotification({
+        open: true,
+        message: 'Failed to create session. Please try again.',
+        severity: 'error'
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1027,8 +1139,188 @@ const ProjectDetail = () => {
           ))}
         </Grid>
       </Paper>
+
+      {/* Sessions Section */}      <Paper sx={{ p: 3, mb: 4 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Typography variant="h5">Sessions</Typography>
+          <Button 
+            variant="contained" 
+            color="primary" 
+            startIcon={<AddIcon />}
+            onClick={() => {
+              setSelectedSession({ name: `Session ${new Date().toLocaleString()}` });
+              setSessionDialogOpen(true);
+            }}
+          >
+            New Session
+          </Button>
+        </Box>
+
+        {sessionsLoading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+            <CircularProgress />
+          </Box>
+        ) : sessions.length === 0 ? (
+          <Box sx={{ textAlign: 'center', p: 3 }}>
+            <Typography color="textSecondary">
+              No sessions found for this project. Generate shot suggestions to create a new session.
+            </Typography>
+          </Box>
+        ) : (
+          <List>
+            {sessions.map((session) => (              <ListItem 
+                key={session.id}
+                button
+                divider
+                onClick={() => handleOpenSession(session)}
+              >
+                <ListItemText
+                  primary={session.name}
+                  secondary={
+                    <>
+                      <Typography variant="body2" component="span" color="textSecondary">
+                        Created: {new Date(session.created_at).toLocaleString()}
+                      </Typography>
+                      <br />
+                      {session.has_shots && <span style={{ color: 'green' }}>✓ Has shots</span>}
+                      {session.has_shots && session.has_input && <span> • </span>}
+                      {session.has_input && <span style={{ color: 'green' }}>✓ Has input data</span>}
+                    </>
+                  }
+                />                <Button
+                  color="primary"
+                  variant="outlined"
+                  size="small"
+                  sx={{ ml: 1 }}
+                  component={Link}
+                  to={`/shot-output/${session.id}`}
+                  state={{ 
+                    sessionId: session.id,
+                    sessionType: session.type,
+                    projectId: projectId
+                  }}
+                  onClick={(e) => e.stopPropagation()} // Prevent triggering the ListItem click
+                >
+                  View Output
+                </Button>
+              </ListItem>
+            ))}
+          </List>
+        )}
+      </Paper>
+
+      {/* Session Creation Dialog */}
+      <Dialog
+        open={sessionDialogOpen}
+        onClose={() => setSessionDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Create New Session</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Enter a name for the new session. This will be used to organize your shots.
+          </DialogContentText>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Session Name"
+            type="text"
+            fullWidth
+            variant="outlined"
+            value={selectedSession?.name || ''}
+            onChange={(e) => setSelectedSession({ ...selectedSession, name: e.target.value })}
+            error={!selectedSession?.name}
+            helperText={!selectedSession?.name ? 'Session name is required' : ''}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSessionDialogOpen(false)} color="primary">
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleCreateSession} 
+            color="primary"
+            disabled={loading || !selectedSession?.name}
+            startIcon={loading ? <CircularProgress size={20} /> : null}
+          >
+            {loading ? 'Creating...' : 'Create Session'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Session Detail Dialog */}
+      <Dialog
+        open={sessionDialogOpen}
+        onClose={() => setSessionDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        {selectedSession && (
+          <>
+            <DialogTitle>
+              Session Details
+              <Typography variant="subtitle2" color="textSecondary">
+                {selectedSession.name}
+              </Typography>
+            </DialogTitle>
+            <DialogContent dividers>
+              <Typography variant="subtitle1" gutterBottom>
+                Created: {new Date(selectedSession.created_at).toLocaleString()}
+              </Typography>
+              
+              {selectedSession.folder_path && (
+                <Typography variant="body2" gutterBottom>
+                  Path: {selectedSession.folder_path}
+                </Typography>
+              )}
+              
+              <Box mt={3}>
+                <Typography variant="h6">Shot Suggestions</Typography>
+                {selectedSession.has_shots ? (
+                  <Paper elevation={1} sx={{ p: 2, mt: 1, maxHeight: '300px', overflow: 'auto' }}>
+                    <Typography variant="body2">
+                      This session contains shot suggestions. Click "View Output" to see them.
+                    </Typography>
+                  </Paper>
+                ) : (
+                  <Typography color="textSecondary">No shot data available</Typography>
+                )}
+              </Box>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setSessionDialogOpen(false)}>
+                Close
+              </Button>              <Button 
+                color="primary" 
+                variant="contained"
+                component={Link}
+                to={`/shot-output/${selectedSession.id}`}
+                state={{ 
+                  sessionId: selectedSession.id,
+                  sessionType: selectedSession.type,
+                  projectId: projectId
+                }}
+              >
+                View Output
+              </Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
+
+      {/* Notification Snackbar */}
+      <Snackbar
+        open={notification.open}
+        autoHideDuration={6000}
+        onClose={handleCloseNotification}
+      >
+        <Alert onClose={handleCloseNotification} severity={notification.severity}>
+          {notification.message}
+        </Alert>
+      </Snackbar>
     </Container>
   );
 };
 
-export default ProjectDetail; 
+export default ProjectDetail;

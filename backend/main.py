@@ -11,12 +11,13 @@ import os
 from pathlib import Path
 import logging
 import re
-from db import (
-    init_db, create_user, authenticate_user, get_user_by_username,
+from db import (    init_db, create_user, authenticate_user, get_user_by_username,
     create_project, get_user_projects, get_project, delete_project,
     save_shot, get_project_shots, get_shot, delete_shot,
     save_session, list_user_sessions, get_session_data, rename_session, delete_session,
-    get_db_connection, save_shot_version, get_shot_versions, close_db_connection
+    list_file_system_sessions, get_filesystem_session_data, save_shots_to_filesystem,
+    get_db_connection, save_shot_version, get_shot_versions, close_db_connection, 
+    list_project_sessions, SESSIONS_ROOT
 )
 from model import gemini, generate_shot_image
 import json
@@ -494,15 +495,72 @@ async def remove_project(
 @app.post("/shots/suggest")
 async def suggest_shots(
     shot_data: ShotCreate,
+    project_id: str = None,
     current_user: dict = Depends(get_current_user)
 ):
     try:
+        logger.info(f"Generating shot suggestions for user {current_user['username']}, project_id: {project_id}")
+        
         # Generate shot suggestions using the Gemini model
-        suggestions = await gemini(
+        shot_suggestions = await gemini(
             scene_description=shot_data.scene_description,
             num_shots=shot_data.num_shots
         )
-        return suggestions  # Return suggestions directly since they're already in the correct format
+        
+        # Save the suggestions to filesystem session
+        input_data = {
+            "scene_description": shot_data.scene_description,
+            "num_shots": shot_data.num_shots,
+            "model_name": shot_data.model_name
+        }
+        
+        # Add project_id if provided
+        if project_id:
+            input_data["project_id"] = project_id
+            logger.info(f"Using project_id: {project_id} for session")
+        
+        # Create a response object with the right format
+        response_data = {
+            "suggestions": shot_suggestions
+        }
+        
+        try:
+            # Save shots to filesystem
+            fs_session = save_shots_to_filesystem(
+                user_id=current_user["id"],
+                session_data=input_data,
+                shots_data=shot_suggestions,  # Use the list directly here
+                project_id=project_id
+            )
+            
+            # Also save to database with a generated name
+            session_name = f"Session {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            session_data = {
+                "input": input_data,
+                "shots": shot_suggestions
+            }
+            
+            # Only save to DB if explicitly enabled
+            if os.environ.get("SAVE_SESSIONS_TO_DB", "false").lower() == "true":
+                save_session(
+                    user_id=current_user["id"],
+                    name=session_name,
+                    data=session_data
+                )
+            
+            # Include session info in the response
+            if fs_session:
+                response_data["session_info"] = {
+                    "id": fs_session["session_id"],
+                    "folder_path": fs_session["folder_path"]
+                }
+                
+            logger.info(f"Successfully saved shots to filesystem: {fs_session}")
+        except Exception as e:
+            # Log the error but continue - we still want to return the suggestions
+            logger.error(f"Error saving shots to filesystem: {str(e)}")
+            
+        return response_data  # Return structured response with suggestions
     except Exception as e:
         logger.error(f"Error in suggest_shots: {str(e)}")
         if "quota" in str(e).lower():
@@ -601,20 +659,27 @@ async def create_shot(
         )
 
 @app.post("/shots/generate-image")
-async def generate_shot_image(
+async def generate_shot_image_endpoint(
     shot_description: str = Form(...),
     model_name: str = Form(...),
     shot_id: str = Form(None),
+    session_id: str = Form(None),
+    shot_index: str = Form(None),  # Changed from int to str to handle form data properly
     current_user: dict = Depends(get_current_user)
 ):
     try:
+        logger.info(f"Generating image for shot description: '{shot_description}' with model: {model_name}")
+        
         # Generate the image
         image_data = generate_shot_image(
             prompt=shot_description,
             model_name=model_name
         )
+        
+        logger.info("Image generation successful")
 
         if shot_id:
+            logger.info(f"Updating existing shot {shot_id} with new image")
             # Get current shot
             shot = get_shot(shot_id)
             if not shot:
@@ -650,18 +715,60 @@ async def generate_shot_image(
                 SET version_number = ?, image_url = ?
                 WHERE id = ?
                 """,
-                (version_number, image_data, shot_id)
-            )
+                (version_number, image_data, shot_id)            )
             conn.commit()
             conn.close()
-
+            logger.info(f"Shot {shot_id} updated successfully with new image")
+        
+        # Update filesystem session if session_id is provided
+        if session_id and shot_index is not None:
+            try:
+                # Convert shot_index to integer if it's a string
+                shot_idx = int(shot_index) if shot_index else None
+                
+                logger.info(f"Updating filesystem session {session_id} with image for shot index {shot_idx}")
+                
+                # Get the session data
+                session_data = get_filesystem_session_data(current_user["id"], session_id)
+                
+                if session_data and "data" in session_data and "shots" in session_data["data"]:
+                    shots = session_data["data"]["shots"]
+                    
+                    # Make sure the shot index is valid
+                    if shot_idx is not None and 0 <= shot_idx < len(shots):                        # Update the shot with the image URL
+                        shots[shot_idx]["image_url"] = image_data
+                        logger.info(f"Successfully added image_url to shot at index {shot_idx}")
+                        
+                        # Find the session folder
+                        user_folder = os.path.join(SESSIONS_ROOT, str(current_user["id"]))
+                        
+                        # Search in all project folders for this session
+                        for project_dir in os.listdir(user_folder):
+                            project_path = os.path.join(user_folder, project_dir)
+                            if os.path.isdir(project_path):
+                                session_path = os.path.join(project_path, session_id)
+                                
+                                if os.path.exists(session_path):
+                                    # Update shots.json file
+                                    shots_path = os.path.join(session_path, 'shots.json')
+                                    with open(shots_path, 'w') as f:
+                                        json.dump(shots, f, indent=2)
+                                    
+                                    logger.info(f"Updated session file at {shots_path}")
+                                    break
+            except Exception as sess_error:
+                logger.error(f"Error updating session file: {str(sess_error)}")
+                # Non-critical error, don't raise HTTP exception
+        
         return {"image_url": image_data}
-
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error generating image: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error generating image: {str(e)}\nTraceback: {error_trace}")
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
 @app.get("/shots/{shot_id}/versions")
 async def get_shot_versions(
@@ -904,20 +1011,34 @@ async def create_new_session(
         )
     return get_session_data(current_user["id"], session.name)
 
-@app.get("/sessions", response_model=List[SessionResponse])
+@app.get("/sessions", response_model=List[dict])
 async def list_sessions(current_user: dict = Depends(get_current_user)):
-    return list_user_sessions(current_user["id"])
+    # Only get sessions from database (filesystem sessions are now in projects)
+    db_sessions = list_user_sessions(current_user["id"])
+    
+    # Add source type to database sessions
+    for session in db_sessions:
+        session["type"] = "database"
+    
+    return sorted(db_sessions, key=lambda x: x.get('updated_at', ''), reverse=True)
 
-@app.get("/sessions/{session_name}")
+@app.get("/sessions/{session_identifier}")
 async def get_session(
-    session_name: str,
+    session_identifier: str,
+    session_type: str = "database",  # can be "database" or "filesystem"
     current_user: dict = Depends(get_current_user)
 ):
-    session = get_session_data(current_user["id"], session_name)
+    if session_type == "filesystem":
+        # Get from filesystem
+        session = get_filesystem_session_data(current_user["id"], session_identifier)
+    else:
+        # Get from database
+        session = get_session_data(current_user["id"], session_identifier)
+    
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found"
+            detail=f"Session not found: {session_identifier}"
         )
     return session
 
@@ -945,6 +1066,19 @@ async def remove_session(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="Failed to delete session"
     )
+
+@app.get("/projects/{project_id}/sessions", response_model=List[dict])
+async def list_project_sessions_api(
+    project_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """List all sessions for a specific project"""
+    # Get sessions for this project from filesystem
+    sessions = list_project_sessions(current_user["id"], project_id)
+    if not sessions:
+        return []
+    
+    return sorted(sessions, key=lambda x: x.get('created_at', ''), reverse=True)
 
 # Register cleanup handler
 @atexit.register

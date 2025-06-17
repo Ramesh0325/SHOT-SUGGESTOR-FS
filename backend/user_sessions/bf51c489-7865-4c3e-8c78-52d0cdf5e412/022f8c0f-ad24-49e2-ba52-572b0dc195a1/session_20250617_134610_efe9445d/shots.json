@@ -1,0 +1,28 @@
+[
+  {
+    "shot_number": 1,
+    "shot_description": "A medium shot of the man sitting on the beach, waves gently crashing in the background, camera slightly angled down",
+    "explanation": "This shot provides context, showing the man in his environment while still focusing on his posture and demeanor, suggesting isolation or contemplation.",
+    "metadata": {
+      "camera_angle": "Medium Shot",
+      "camera_movement": "Static",
+      "framing": "Medium Shot",
+      "lighting": "Natural lighting",
+      "visual_elements": "Lighting effects",
+      "emotional_impact": "Neutral emotional tone"
+    }
+  },
+  {
+    "shot_number": 2,
+    "shot_description": "A tight close-up on the man's face, focusing on his eyes as he gazes out at the ocean, camera remains still",
+    "explanation": "This intimate shot highlights the man's emotions, allowing the audience to connect with his inner thoughts and feelings as he contemplates the vastness of the sea.",
+    "metadata": {
+      "camera_angle": "Close-up",
+      "camera_movement": "Static",
+      "framing": "Close-up",
+      "lighting": "Natural lighting",
+      "visual_elements": "Character focus",
+      "emotional_impact": "Neutral emotional tone"
+    }
+  }
+]

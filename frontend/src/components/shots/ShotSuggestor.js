@@ -20,27 +20,35 @@ import {
   Slider,
   Paper,
   CircularProgress,
-  Divider
+  Divider,
+  Snackbar,
+  Alert
 } from '@mui/material';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
 
-const ShotSuggestor = () => {
+const ShotSuggestor = ({ projectId }) => {
   const [sceneDescription, setSceneDescription] = useState('');
   const [numShots, setNumShots] = useState(5);
   const [modelName, setModelName] = useState('runwayml/stable-diffusion-v1-5');
   const [suggestedShots, setSuggestedShots] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);  const [open, setOpen] = useState(false);
   const [selectedShot, setSelectedShot] = useState(null);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
   const { user } = useAuth();
-
   const handleSuggestShots = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
+      
+      // Add the project_id to the URL if available
+      const endpoint = projectId 
+        ? `http://localhost:8000/shots/suggest?project_id=${projectId}`
+        : 'http://localhost:8000/shots/suggest';
+        
       const response = await axios.post(
-        'http://localhost:8000/shots/suggest',
+        endpoint,
         {
           scene_description: sceneDescription,
           num_shots: numShots,
@@ -52,10 +60,15 @@ const ShotSuggestor = () => {
             'Content-Type': 'application/json'
           }
         }
-      );
-
-      if (response.data && response.data.suggestions) {
+      );      if (response.data && response.data.suggestions) {
         setSuggestedShots(response.data.suggestions);
+        
+        // Show notification if session info is available
+        if (response.data.session_info) {
+          console.log('Session saved:', response.data.session_info);
+          setSnackbarMessage('Shot suggestions saved to session history!');
+          setSnackbarOpen(true);
+        }
       } else {
         console.error('Invalid response format:', response.data);
       }
@@ -259,10 +272,25 @@ const ShotSuggestor = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
+        </DialogActions>      </Dialog>
+      
+      {/* Snackbar notification */}
+      <Snackbar
+        open={snackbarOpen}
+        autoHideDuration={5000}
+        onClose={() => setSnackbarOpen(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert 
+          onClose={() => setSnackbarOpen(false)} 
+          severity="success" 
+          sx={{ width: '100%' }}
+        >
+          {snackbarMessage}
+        </Alert>
+      </Snackbar>
     </Container>
   );
 };
 
-export default ShotSuggestor; 
+export default ShotSuggestor;

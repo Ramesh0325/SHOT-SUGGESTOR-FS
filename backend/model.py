@@ -236,29 +236,41 @@ def initialize_models():
     """Initialize the Stable Diffusion models"""
     global pipe, controlnet, controlnet_pipe
     
-    if torch.cuda.is_available():
-        device = "cuda"
-    else:
-        device = "cpu"
-    
-    # Initialize base model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        SD_MODEL_ID,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32
-    ).to(device)
-    
-    # Initialize ControlNet model
-    controlnet = ControlNetModel.from_pretrained(
-        CONTROLNET_MODEL_ID,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32
-    )
-    
-    # Initialize ControlNet pipeline
-    controlnet_pipe = StableDiffusionControlNetPipeline.from_pretrained(
-        SD_MODEL_ID,
-        controlnet=controlnet,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32
-    ).to(device)
+    try:
+        if torch.cuda.is_available():
+            device = "cuda"
+            logger.info("CUDA is available. Using GPU for image generation.")
+        else:
+            device = "cpu"
+            logger.info("CUDA is not available. Using CPU for image generation (will be slow).")
+        
+        logger.info("Initializing base Stable Diffusion model...")
+        # Initialize base model
+        pipe = StableDiffusionPipeline.from_pretrained(
+            SD_MODEL_ID,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32
+        ).to(device)
+        
+        logger.info("Initializing ControlNet model...")
+        # Initialize ControlNet model
+        controlnet = ControlNetModel.from_pretrained(
+            CONTROLNET_MODEL_ID,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32
+        )
+        
+        logger.info("Initializing ControlNet pipeline...")
+        # Initialize ControlNet pipeline
+        controlnet_pipe = StableDiffusionControlNetPipeline.from_pretrained(
+            SD_MODEL_ID,
+            controlnet=controlnet,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32
+        ).to(device)
+        
+        logger.info("All models initialized successfully.")
+        return True
+    except Exception as e:
+        logger.error(f"Error initializing models: {str(e)}", exc_info=True)
+        return False
 
 def detect_language(text: str) -> str:
     """Detect the language of the input text"""
@@ -475,59 +487,89 @@ def generate_shot_image(
 ) -> str:
     """Generate an image based on the shot description"""
     try:
+        logger.info(f"Starting image generation for prompt: '{prompt}' with model: {model_name}")
+        
+        # Check if model is initialized
         if pipe is None:
+            logger.info("Models not initialized. Initializing now...")
             initialize_models()
+            if pipe is None:
+                logger.error("Failed to initialize models")
+                raise RuntimeError("Failed to initialize image generation models")
+            logger.info("Models initialized successfully")
         
         # Prepare the prompt
         full_prompt = f"cinematic shot, professional photography, {prompt}"
+        logger.info(f"Using full prompt: '{full_prompt}'")
         
         if reference_image:
+            logger.info("Using reference image with ControlNet")
             # Use ControlNet for reference image
             if controlnet_pipe is None:
+                logger.error("ControlNet model not initialized")
                 raise HTTPException(
                     status_code=500,
                     detail="ControlNet model not initialized"
                 )
             
             # Process reference image
-            if isinstance(reference_image, str):
-                if reference_image.startswith(('http://', 'https://')):
-                    image = load_image(reference_image)
+            try:
+                if isinstance(reference_image, str):
+                    if reference_image.startswith(('http://', 'https://')):
+                        logger.info("Loading image from URL")
+                        image = load_image(reference_image)
+                    else:
+                        logger.info("Loading image from base64 string")
+                        image = Image.open(BytesIO(base64.b64decode(reference_image)))
                 else:
-                    image = Image.open(BytesIO(base64.b64decode(reference_image)))
-            else:
-                image = Image.open(reference_image)
-            
-            # Generate image with ControlNet
-            image = controlnet_pipe(
-                prompt=full_prompt,
-                negative_prompt=negative_prompt,
-                image=image,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale
-            ).images[0]
+                    logger.info("Loading image from file-like object")
+                    image = Image.open(reference_image)
+                
+                # Generate image with ControlNet
+                logger.info("Generating image with ControlNet")
+                image = controlnet_pipe(
+                    prompt=full_prompt,
+                    negative_prompt=negative_prompt,
+                    image=image,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale
+                ).images[0]
+            except Exception as img_error:
+                logger.error(f"Error processing reference image: {str(img_error)}")
+                raise
         else:
             # Generate image without reference
-            image = pipe(
-                prompt=full_prompt,
-                negative_prompt=negative_prompt,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale
-            ).images[0]
+            logger.info("Generating image with standard diffusion pipeline")
+            try:
+                image = pipe(
+                    prompt=full_prompt,
+                    negative_prompt=negative_prompt,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale
+                ).images[0]
+                logger.info("Image generation successful")
+            except Exception as pipe_error:
+                logger.error(f"Error in diffusion pipeline: {str(pipe_error)}")
+                raise
         
         # Convert image to base64
-        buffered = BytesIO()
-        image.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        
-        # For now, we'll return the base64 string
-        # In a production environment, you would:
-        # 1. Save the image to a storage service (e.g., S3)
-        # 2. Return the URL to the saved image
-        return f"data:image/png;base64,{img_str}"
+        try:
+            logger.info("Converting image to base64")
+            buffered = BytesIO()
+            image.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            logger.info("Image conversion successful")
+            
+            # Return the base64 string
+            return f"data:image/png;base64,{img_str}"
+        except Exception as conv_error:
+            logger.error(f"Error converting image to base64: {str(conv_error)}")
+            raise
     
     except Exception as e:
-        print(f"Error generating image: {e}")
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error generating image: {str(e)}\nTraceback: {error_trace}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate image: {str(e)}"

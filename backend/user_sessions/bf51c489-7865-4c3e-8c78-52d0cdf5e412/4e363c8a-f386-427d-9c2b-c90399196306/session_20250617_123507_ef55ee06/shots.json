@@ -1,0 +1,28 @@
+[
+  {
+    "shot_number": 1,
+    "shot_description": "A bustling village square filled with people, camera static and slightly high angle",
+    "explanation": "This shot establishes the setting and shows the general happiness of the scene.",
+    "metadata": {
+      "camera_angle": "Wide Shot",
+      "camera_movement": "Static",
+      "framing": "Wide Shot",
+      "lighting": "Natural lighting",
+      "visual_elements": "Lighting effects",
+      "emotional_impact": "Neutral emotional tone"
+    }
+  },
+  {
+    "shot_number": 2,
+    "shot_description": "Faces of different villagers laughing, camera slowly dollies in and out",
+    "explanation": "This shot captures the infectious joy and allows the audience to connect with the characters on an emotional level.",
+    "metadata": {
+      "camera_angle": "Medium Close-Up",
+      "camera_movement": "Static",
+      "framing": "Medium Close-Up",
+      "lighting": "Natural lighting",
+      "visual_elements": "Character focus",
+      "emotional_impact": "Neutral emotional tone"
+    }
+  }
+]
