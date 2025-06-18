@@ -5,12 +5,14 @@ const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [token, setToken] = useState(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
+    const storedToken = localStorage.getItem('token');
+    if (storedToken) {
+      setToken(storedToken);
       checkAuthStatus();
     } else {
       console.log('No token found in localStorage');
@@ -70,6 +72,7 @@ export const AuthProvider = ({ children }) => {
       
       console.log('Login successful, saving token');
       localStorage.setItem('token', access_token);
+      setToken(access_token);
       setUser(userData);
       return true;
     } catch (err) {
@@ -108,6 +111,7 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     console.log('Logging out user');
     localStorage.removeItem('token');
+    setToken(null);
     setUser(null);
   };
 
@@ -118,7 +122,9 @@ export const AuthProvider = ({ children }) => {
     login,
     register,
     logout,
-    checkAuthStatus
+    checkAuthStatus,
+    token,
+    setToken
   };
 
   return (

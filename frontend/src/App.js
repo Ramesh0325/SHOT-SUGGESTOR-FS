@@ -7,10 +7,12 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/auth/Login';
 import Register from './components/auth/Register';
 import Navbar from './components/layout/Navbar';
+import Dashboard from './components/Dashboard';
 import Projects from './components/projects/Projects';
 import ProjectDetail from './components/projects/ProjectDetail';
 import Sessions from './components/sessions/Sessions';
 import ShotOutputPage from './ShotOutputPage';
+import ImageFusion from './components/fusion/ImageFusion';
 
 // Create a theme instance
 const theme = createTheme({
@@ -94,7 +96,7 @@ const router = createBrowserRouter([
     element: (
       <ProtectedRoute>
         <Layout>
-          <Navigate to="/projects" replace />
+          <Navigate to="/dashboard" replace />
         </Layout>
       </ProtectedRoute>
     ),
@@ -111,6 +113,39 @@ const router = createBrowserRouter([
     errorElement: <ErrorPage />
   },
   {
+    path: '/dashboard',
+    element: (
+      <ProtectedRoute>
+        <Layout>
+          <Dashboard />
+        </Layout>
+      </ProtectedRoute>
+    ),
+    errorElement: <ErrorPage />
+  },
+  {
+    path: '/shot-suggestor',
+    element: (
+      <ProtectedRoute>
+        <Layout>
+          <ShotOutputPage />
+        </Layout>
+      </ProtectedRoute>
+    ),
+    errorElement: <ErrorPage />
+  },
+  {
+    path: '/image-fusion',
+    element: (
+      <ProtectedRoute>
+        <Layout>
+          <ImageFusion />
+        </Layout>
+      </ProtectedRoute>
+    ),
+    errorElement: <ErrorPage />
+  },
+  {
     path: '/projects',
     element: (
       <ProtectedRoute>
@@ -120,7 +155,8 @@ const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     errorElement: <ErrorPage />
-  },  {
+  },
+  {
     path: '/projects/:projectId',
     element: (
       <ProtectedRoute>
@@ -130,7 +166,8 @@ const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     errorElement: <ErrorPage />
-  },  {
+  },
+  {
     path: '/sessions',
     element: (
       <ProtectedRoute>

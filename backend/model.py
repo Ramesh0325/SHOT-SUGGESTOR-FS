@@ -592,17 +592,210 @@ def determine_visual_elements(description: str) -> str:
     return ", ".join(elements) if elements else "Standard composition"
 
 def determine_emotional_impact(description: str) -> str:
-    """Determine emotional impact from shot description"""
-    description_lower = description.lower()
+    """Determine the emotional impact based on the description"""
+    emotional_keywords = {
+        "dramatic": ["dramatic", "intense", "powerful", "emotional", "passionate"],
+        "peaceful": ["peaceful", "calm", "serene", "tranquil", "gentle"],
+        "mysterious": ["mysterious", "enigmatic", "mystical", "ethereal", "otherworldly"],
+        "energetic": ["energetic", "dynamic", "vibrant", "lively", "exciting"],
+        "melancholic": ["melancholic", "sad", "nostalgic", "contemplative", "reflective"]
+    }
     
-    if any(word in description_lower for word in ['intense', 'dramatic', 'powerful']):
-        return "High emotional intensity"
-    elif any(word in description_lower for word in ['subtle', 'gentle', 'soft']):
-        return "Subtle emotional undertone"
-    elif any(word in description_lower for word in ['tension', 'conflict', 'dramatic']):
-        return "Building tension"
-    else:
-        return "Neutral emotional tone"
+    description_lower = description.lower()
+    for emotion, keywords in emotional_keywords.items():
+        if any(keyword in description_lower for keyword in keywords):
+            return emotion
+    return "neutral"
+
+def generate_fusion_image(
+    prompt: str,
+    reference_images: List[Image.Image],
+    model_name: str = "runwayml/stable-diffusion-v1-5",
+    negative_prompt: str = "blurry, low quality, distorted, deformed, inconsistent style, multiple images merged poorly",
+    num_inference_steps: int = 50,
+    guidance_scale: float = 8.5,
+    strength: float = 0.8
+) -> str:
+    """
+    Generate a single image that fuses multiple reference images with a user prompt.
+    
+    Args:
+        prompt: User's creative requirements/description
+        reference_images: List of PIL Image objects to use as references
+        model_name: The diffusion model to use
+        negative_prompt: What to avoid in the generation
+        num_inference_steps: Number of denoising steps
+        guidance_scale: How closely to follow the prompt
+        strength: How much to blend the reference images (0.0-1.0)
+    
+    Returns:
+        Base64 encoded image string
+    """
+    try:
+        logger.info(f"Starting fusion image generation with {len(reference_images)} reference images")
+        
+        # Check for GPU availability
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Using device: {device}")
+        
+        # Initialize the pipeline
+        if device == "cuda":
+            pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+                model_name,
+                torch_dtype=torch.float16,
+                use_safetensors=True
+            ).to(device)
+        else:
+            pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+                model_name,
+                torch_dtype=torch.float32
+            ).to(device)
+        
+        # Process reference images
+        processed_images = []
+        for i, img in enumerate(reference_images):
+            # Convert to RGB if necessary
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            
+            # Resize to a consistent size (512x512 for processing)
+            img = img.resize((512, 512), Image.Resampling.LANCZOS)
+            processed_images.append(img)
+        
+        # Create a composite reference image by blending all images
+        if len(processed_images) > 1:
+            # Blend images using weighted average
+            composite = Image.new('RGB', (512, 512), (0, 0, 0))
+            total_weight = len(processed_images)
+            
+            for i, img in enumerate(processed_images):
+                # Convert to numpy for blending
+                img_array = np.array(img).astype(np.float32)
+                weight = 1.0 / total_weight
+                composite_array = np.array(composite).astype(np.float32)
+                composite_array = composite_array * (1 - weight) + img_array * weight
+                composite = Image.fromarray(composite_array.astype(np.uint8))
+        else:
+            composite = processed_images[0]
+        
+        # Enhance the prompt with fusion-specific instructions
+        enhanced_prompt = f"{prompt}, cohesive composition, unified style, seamless integration of reference elements, professional photography"
+        
+        # Generate the fused image
+        logger.info("Generating fused image...")
+        result = pipe(
+            prompt=enhanced_prompt,
+            negative_prompt=negative_prompt,
+            image=composite,
+            strength=strength,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps,
+            num_images_per_prompt=1
+        )
+        
+        # Get the generated image
+        generated_image = result.images[0]
+        
+        # Convert to base64
+        buffered = BytesIO()
+        generated_image.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        
+        logger.info("Fusion image generation completed successfully")
+        return img_str
+        
+    except Exception as e:
+        logger.error(f"Error in fusion image generation: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate fusion image: {str(e)}"
+        )
+
+def analyze_reference_images(images: List[Image.Image]) -> Dict[str, Any]:
+    """
+    Analyze reference images to extract key visual elements and characteristics.
+    
+    Args:
+        images: List of PIL Image objects
+    
+    Returns:
+        Dictionary containing analysis results
+    """
+    try:
+        analysis = {
+            "color_palettes": [],
+            "composition_styles": [],
+            "lighting_conditions": [],
+            "dominant_elements": [],
+            "overall_mood": []
+        }
+        
+        for img in images:
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            
+            # Analyze colors
+            img_array = np.array(img)
+            colors = img_array.reshape(-1, 3)
+            
+            # Get dominant colors
+            from sklearn.cluster import KMeans
+            kmeans = KMeans(n_clusters=5, random_state=42)
+            kmeans.fit(colors)
+            dominant_colors = kmeans.cluster_centers_.astype(int)
+            
+            # Determine color palette type
+            avg_brightness = np.mean(colors)
+            if avg_brightness > 180:
+                palette_type = "bright"
+            elif avg_brightness < 80:
+                palette_type = "dark"
+            else:
+                palette_type = "balanced"
+            
+            analysis["color_palettes"].append(palette_type)
+            
+            # Analyze composition (simple edge detection)
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            edges = cv2.Canny(gray, 50, 150)
+            edge_density = np.sum(edges > 0) / edges.size
+            
+            if edge_density > 0.1:
+                composition = "detailed"
+            elif edge_density > 0.05:
+                composition = "moderate"
+            else:
+                composition = "minimal"
+            
+            analysis["composition_styles"].append(composition)
+            
+            # Analyze lighting
+            brightness_std = np.std(gray)
+            if brightness_std > 50:
+                lighting = "high_contrast"
+            elif brightness_std > 25:
+                lighting = "moderate_contrast"
+            else:
+                lighting = "low_contrast"
+            
+            analysis["lighting_conditions"].append(lighting)
+        
+        # Determine overall characteristics
+        analysis["overall_mood"] = "balanced"  # Default
+        if len(set(analysis["color_palettes"])) == 1:
+            analysis["overall_mood"] = analysis["color_palettes"][0]
+        
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Error analyzing reference images: {str(e)}")
+        return {
+            "color_palettes": ["balanced"] * len(images),
+            "composition_styles": ["moderate"] * len(images),
+            "lighting_conditions": ["moderate_contrast"] * len(images),
+            "dominant_elements": [],
+            "overall_mood": "balanced"
+        }
 
 # Initialize models on import
 try:

@@ -18,7 +18,7 @@ import {
 import axios from 'axios';
 import { useAuth } from './contexts/AuthContext';
 
-const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, handleGenerateImage }) => {
+const ShotOutputPage = ({ shots: propShots, images: propImages, handleGenerateImage }) => {
   const { sessionId } = useParams();
   const location = useLocation();
   const { user } = useAuth();
@@ -212,12 +212,9 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
                     <button
                       className="generate-btn"
                       onClick={() => handleGenerateImage(shot, idx)}
-                      disabled={shotLoading[idx]}
                       style={{ marginLeft: '8px', minWidth: '120px' }}
                     >
-                      {shotLoading[idx] ? (
-                        <span className="spinner" style={{ display: 'inline-block', width: 18, height: 18, border: '2px solid #1976d2', borderTop: '2px solid #fff', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></span>
-                      ) : 'Generate Image'}
+                      Generate Image
                     </button>
                   )}
                 </div>
@@ -234,9 +231,6 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
             </li>
           ))}
         </ul>
-        <style>{`
-          @keyframes spin { 100% { transform: rotate(360deg); } }
-        `}</style>
       </div>
     );
   }
@@ -272,9 +266,10 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
 
         <Divider sx={{ my: 3 }} />
 
-        <Typography variant="h6" gutterBottom>
-          Shot Suggestions
-        </Typography>        <Grid container spacing={3}>
+        <Box sx={{ mt: 4 }}>
+          <Typography variant="h5" gutterBottom>
+            Shot Suggestions
+          </Typography>
           {sessionData.shots && sessionData.shots.length > 0 ? (
             sessionData.shots.map((shot, index) => (
               <Grid item xs={12} key={index}>
@@ -399,10 +394,13 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
               </Grid>
             ))
           ) : (
-            <Grid item xs={12}>
-              <Typography>No shot data available</Typography>            </Grid>
+            <Box sx={{ textAlign: 'center', my: 4 }}>
+              <Typography color="text.secondary">
+                No shots generated yet. If you refreshed during generation, please try again.
+              </Typography>
+            </Box>
           )}
-        </Grid>
+        </Box>
       </Paper>
         {/* Feedback Snackbar */}
       <Snackbar

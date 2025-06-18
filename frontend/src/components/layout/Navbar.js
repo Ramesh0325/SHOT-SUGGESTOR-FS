@@ -51,24 +51,17 @@ const Navbar = () => {
             }}
           >
             Shot Suggestor
-          </Typography>          <Box sx={{ flexGrow: 1, display: 'flex', gap: 2 }}>
+          </Typography>
+          
+          <Box sx={{ flexGrow: 1, display: 'flex', gap: 2 }}>
             {user && (
-              <>
-                <Button
-                  component={RouterLink}
-                  to="/projects"
-                  sx={{ color: 'white' }}
-                >
-                  Projects
-                </Button>
-                <Button
-                  component={RouterLink}
-                  to="/sessions"
-                  sx={{ color: 'white' }}
-                >
-                  Sessions
-                </Button>
-              </>
+              <Button
+                component={RouterLink}
+                to="/dashboard"
+                sx={{ color: 'white' }}
+              >
+                Dashboard
+              </Button>
             )}
           </Box>
 

@@ -19,12 +19,15 @@ from db import (    init_db, create_user, authenticate_user, get_user_by_usernam
     get_db_connection, save_shot_version, get_shot_versions, close_db_connection, 
     list_project_sessions, SESSIONS_ROOT
 )
-from model import gemini, generate_shot_image
+from model import gemini, generate_shot_image, generate_fusion_image, analyze_reference_images
 import json
 from dotenv import load_dotenv
 import sqlite3
 import atexit
 import contextlib
+from PIL import Image
+from io import BytesIO
+import torch
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -58,7 +61,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # (or ["*"] for development)
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Allow both ports
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,10 +70,11 @@ app.add_middleware(
 # Add OPTIONS endpoint for CORS preflight
 @app.options("/{full_path:path}")
 async def options_handler(request: Request, full_path: str):
+    origin = request.headers.get("origin", "http://localhost:3000")
     return JSONResponse(
         content={},
         headers={
-            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
             "Access-Control-Allow-Headers": "*",
             "Access-Control-Allow-Credentials": "true",
@@ -139,6 +143,13 @@ class SessionResponse(BaseModel):
     name: str
     created_at: datetime
     updated_at: datetime
+
+class FusionImageRequest(BaseModel):
+    prompt: str
+    model_name: str = "runwayml/stable-diffusion-v1-5"
+    strength: float = 0.8
+    guidance_scale: float = 8.5
+    num_inference_steps: int = 50
 
 # Helper functions
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -1079,6 +1090,155 @@ async def list_project_sessions_api(
         return []
     
     return sorted(sessions, key=lambda x: x.get('created_at', ''), reverse=True)
+
+@app.post("/fusion/generate")
+async def generate_fusion_image_endpoint(
+    prompt: str = Form(...),
+    model_name: str = Form("runwayml/stable-diffusion-v1-5"),
+    strength: float = Form(0.8),
+    guidance_scale: float = Form(8.5),
+    num_inference_steps: int = Form(50),
+    reference_images: List[UploadFile] = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate a fused image from multiple reference images and a prompt.
+    
+    Args:
+        prompt: User's creative requirements/description
+        model_name: The diffusion model to use
+        strength: How much to blend reference images (0.0-1.0)
+        guidance_scale: How closely to follow the prompt
+        num_inference_steps: Number of denoising steps
+        reference_images: List of uploaded reference images
+        current_user: Authenticated user
+    
+    Returns:
+        Base64 encoded generated image
+    """
+    try:
+        logger.info(f"Fusion image generation request from user {current_user['username']}")
+        logger.info(f"Prompt: {prompt}")
+        logger.info(f"Number of reference images: {len(reference_images)}")
+        
+        # Validate inputs
+        if len(reference_images) < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one reference image is required"
+            )
+        
+        if len(reference_images) > 10:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Maximum 10 reference images allowed"
+            )
+        
+        if not prompt.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Prompt cannot be empty"
+            )
+        
+        # Validate strength and guidance_scale
+        if not 0.0 <= strength <= 1.0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Strength must be between 0.0 and 1.0"
+            )
+        
+        if not 1.0 <= guidance_scale <= 20.0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Guidance scale must be between 1.0 and 20.0"
+            )
+        
+        # Process uploaded images
+        processed_images = []
+        for i, uploaded_file in enumerate(reference_images):
+            try:
+                # Validate file type
+                if not uploaded_file.content_type.startswith('image/'):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"File {uploaded_file.filename} is not an image"
+                    )
+                
+                # Read and process image
+                image_data = await uploaded_file.read()
+                image = Image.open(BytesIO(image_data))
+                
+                # Validate image size (max 10MB)
+                if len(image_data) > 10 * 1024 * 1024:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Image {uploaded_file.filename} is too large (max 10MB)"
+                    )
+                
+                processed_images.append(image)
+                logger.info(f"Processed image {i+1}: {uploaded_file.filename}")
+                
+            except Exception as e:
+                logger.error(f"Error processing image {uploaded_file.filename}: {str(e)}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error processing image {uploaded_file.filename}: {str(e)}"
+                )
+        
+        # Analyze reference images for better prompt enhancement
+        try:
+            analysis = analyze_reference_images(processed_images)
+            logger.info(f"Image analysis: {analysis}")
+            
+            # Enhance prompt based on analysis
+            enhanced_prompt = prompt
+            if analysis["overall_mood"] != "balanced":
+                enhanced_prompt += f", {analysis['overall_mood']} mood"
+            
+            # Add composition hints
+            if "detailed" in analysis["composition_styles"]:
+                enhanced_prompt += ", detailed composition"
+            elif "minimal" in analysis["composition_styles"]:
+                enhanced_prompt += ", minimal composition"
+            
+        except Exception as e:
+            logger.warning(f"Image analysis failed, using original prompt: {str(e)}")
+            enhanced_prompt = prompt
+        
+        # Generate the fused image
+        logger.info("Starting fusion image generation...")
+        generated_image = generate_fusion_image(
+            prompt=enhanced_prompt,
+            reference_images=processed_images,
+            model_name=model_name,
+            strength=strength,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps
+        )
+        
+        logger.info("Fusion image generation completed successfully")
+        
+        return {
+            "image_url": generated_image,
+            "prompt_used": enhanced_prompt,
+            "analysis": analysis if 'analysis' in locals() else None,
+            "processing_info": {
+                "device": "cuda" if torch.cuda.is_available() else "cpu",
+                "model": model_name,
+                "strength": strength,
+                "guidance_scale": guidance_scale,
+                "num_inference_steps": num_inference_steps
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in fusion image generation: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate fusion image: {str(e)}"
+        )
 
 # Register cleanup handler
 @atexit.register

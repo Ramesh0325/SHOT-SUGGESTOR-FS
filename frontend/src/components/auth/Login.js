@@ -8,7 +8,8 @@ import {
   Button,
   Link,
   Alert,
-  Paper
+  Paper,
+  CircularProgress
 } from '@mui/material';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -22,7 +23,7 @@ const Login = () => {
     e.preventDefault();
     const success = await login(username, password);
     if (success) {
-      navigate('/projects');
+      navigate('/dashboard');
     }
   };
 
