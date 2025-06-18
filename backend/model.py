@@ -30,6 +30,14 @@ try:
 except ImportError:
     raise ImportError("OpenCV (cv2) is required for ControlNet reference image preprocessing. Please install it with 'pip install opencv-python-headless' and restart your app.")
 
+# Try to import ControlNet Reference Pipeline, but don't fail if not available
+try:
+    from diffusers import StableDiffusionControlNetReferencePipeline
+    CONTROLNET_REFERENCE_AVAILABLE = True
+except ImportError:
+    CONTROLNET_REFERENCE_AVAILABLE = False
+    print("Warning: StableDiffusionControlNetReferencePipeline not available. Advanced fusion will use fallback method.")
+
 # Load environment variables
 load_dotenv()
 
@@ -809,3 +817,66 @@ cursor = conn.cursor()
 cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
 print(cursor.fetchall())
 conn.close()
+
+def generate_reference_style_image(
+    prompt: str,
+    reference_images: list,
+    model_name: str = "lllyasviel/sd-controlnet-reference",
+    num_inference_steps: int = 30,
+    guidance_scale: float = 7.5
+) -> str:
+    """
+    Generate an image using a reference image for style/theme and a prompt for content/angle.
+    Uses ControlNet Reference Adapter if available, otherwise falls back to regular fusion.
+    """
+    import torch
+    from PIL import Image
+    from io import BytesIO
+    import base64
+
+    # Check if ControlNet Reference is available
+    if not CONTROLNET_REFERENCE_AVAILABLE:
+        logger.warning("ControlNet Reference not available, using fallback fusion method")
+        # Convert reference_images to PIL Images if they're file paths
+        pil_images = []
+        for img in reference_images:
+            if not isinstance(img, Image.Image):
+                pil_images.append(Image.open(img))
+            else:
+                pil_images.append(img)
+        return generate_fusion_image(prompt, pil_images)
+
+    try:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        pipe = StableDiffusionControlNetReferencePipeline.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32
+        ).to(device)
+
+        # Use the first reference image for style
+        reference_image = reference_images[0]
+        if not isinstance(reference_image, Image.Image):
+            reference_image = Image.open(reference_image)
+
+        result = pipe(
+            prompt=prompt,
+            reference_image=reference_image,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+        )
+        generated_image = result.images[0]
+        buffered = BytesIO()
+        generated_image.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        return img_str
+    except Exception as e:
+        logger.error(f"Error with ControlNet Reference: {e}")
+        logger.info("Falling back to regular fusion method")
+        # Fall back to regular fusion
+        pil_images = []
+        for img in reference_images:
+            if not isinstance(img, Image.Image):
+                pil_images.append(Image.open(img))
+            else:
+                pil_images.append(img)
+        return generate_fusion_image(prompt, pil_images)

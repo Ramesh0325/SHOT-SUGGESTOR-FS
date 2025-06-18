@@ -19,7 +19,7 @@ from db import (    init_db, create_user, authenticate_user, get_user_by_usernam
     get_db_connection, save_shot_version, get_shot_versions, close_db_connection, 
     list_project_sessions, SESSIONS_ROOT
 )
-from model import gemini, generate_shot_image, generate_fusion_image, analyze_reference_images
+from model import gemini, generate_shot_image, generate_fusion_image, analyze_reference_images, generate_reference_style_image
 import json
 from dotenv import load_dotenv
 import sqlite3
@@ -1239,6 +1239,27 @@ async def generate_fusion_image_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate fusion image: {str(e)}"
         )
+
+@app.post("/api/fuse-reference")
+async def fuse_reference(
+    prompt: str = Form(...),
+    files: list[UploadFile] = File(...)
+):
+    """
+    Generate an image using reference images for style/theme and a prompt for content/angle.
+    Uses ControlNet Reference Adapter.
+    """
+    from PIL import Image
+    import tempfile
+    reference_images = []
+    for file in files:
+        contents = await file.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            tmp.write(contents)
+            tmp.flush()
+            reference_images.append(tmp.name)
+    img_str = generate_reference_style_image(prompt, reference_images)
+    return {"image": img_str}
 
 # Register cleanup handler
 @atexit.register
