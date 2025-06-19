@@ -19,7 +19,7 @@ from db import (    init_db, create_user, authenticate_user, get_user_by_usernam
     get_db_connection, save_shot_version, get_shot_versions, close_db_connection, 
     list_project_sessions, SESSIONS_ROOT
 )
-from model import gemini, generate_shot_image, generate_fusion_image, analyze_reference_images, generate_reference_style_image
+from model import gemini, generate_shot_image, generate_fusion_image, analyze_reference_images, generate_reference_style_image, generate_identity_preserving_image, generate_pose_transfer_image
 import json
 from dotenv import load_dotenv
 import sqlite3
@@ -80,7 +80,7 @@ async def options_handler(request: Request, full_path: str):
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Max-Age": "3600"
         }
-    )
+)
 
 # Pydantic models for request/response validation
 class Token(BaseModel):
@@ -191,7 +191,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     except JWTError as e:
         logger.error(f"JWT validation error: {str(e)}")
         raise credentials_exception
-        
+    
     # Get user from database
     user = get_user_by_username(username=token_data.username)
     if user is None:
@@ -292,7 +292,7 @@ async def register(user: UserCreate):
         created_user = get_user_by_username(username=user.username)
         if not created_user:
             return JSONResponse(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={"detail": "Failed to retrieve created user"},
                 headers={
                     "Access-Control-Allow-Origin": "http://localhost:3000",
@@ -360,6 +360,7 @@ async def list_projects(current_user: dict = Depends(get_current_user)):
 @app.get("/projects/{project_id}", response_model=ProjectResponse)
 async def get_project_details(
     project_id: str,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     try:
@@ -1095,9 +1096,9 @@ async def list_project_sessions_api(
 async def generate_fusion_image_endpoint(
     prompt: str = Form(...),
     model_name: str = Form("runwayml/stable-diffusion-v1-5"),
-    strength: float = Form(0.8),
-    guidance_scale: float = Form(8.5),
-    num_inference_steps: int = Form(50),
+    strength: float = Form(0.65),  # Reduced from 0.8 for better reference preservation
+    guidance_scale: float = Form(10.0),  # Increased from 8.5 for better prompt following
+    num_inference_steps: int = Form(60),  # Increased from 50 for better quality
     reference_images: List[UploadFile] = File(...),
     current_user: dict = Depends(get_current_user)
 ):
@@ -1107,9 +1108,9 @@ async def generate_fusion_image_endpoint(
     Args:
         prompt: User's creative requirements/description
         model_name: The diffusion model to use
-        strength: How much to blend reference images (0.0-1.0)
-        guidance_scale: How closely to follow the prompt
-        num_inference_steps: Number of denoising steps
+        strength: How much to blend reference images (0.0-1.0) - lower values preserve more reference characteristics
+        guidance_scale: How closely to follow the prompt - higher values follow prompt more closely
+        num_inference_steps: Number of denoising steps - more steps for better quality
         reference_images: List of uploaded reference images
         current_user: Authenticated user
     
@@ -1190,16 +1191,36 @@ async def generate_fusion_image_endpoint(
             analysis = analyze_reference_images(processed_images)
             logger.info(f"Image analysis: {analysis}")
             
-            # Enhance prompt based on analysis
+            # Enhance prompt based on analysis to preserve complete themes
             enhanced_prompt = prompt
+            
+            # Add theme preservation elements
+            if analysis.get("theme_elements"):
+                theme_elements = ", ".join(analysis["theme_elements"])
+                enhanced_prompt += f", {theme_elements}"
+            
+            # Add prop preservation
+            if analysis.get("prop_elements"):
+                prop_elements = ", ".join(analysis["prop_elements"])
+                enhanced_prompt += f", same props: {prop_elements}"
+            
+            # Add setting preservation
+            if analysis.get("setting_elements"):
+                setting_elements = ", ".join(analysis["setting_elements"])
+                enhanced_prompt += f", same setting: {setting_elements}"
+            
+            # Add overall mood if consistent
             if analysis["overall_mood"] != "balanced":
                 enhanced_prompt += f", {analysis['overall_mood']} mood"
             
-            # Add composition hints
-            if "detailed" in analysis["composition_styles"]:
-                enhanced_prompt += ", detailed composition"
-            elif "minimal" in analysis["composition_styles"]:
-                enhanced_prompt += ", minimal composition"
+            # Add visual style consistency
+            if analysis["visual_style"] != "balanced":
+                enhanced_prompt += f", {analysis['visual_style']} composition"
+            
+            # Add dominant elements preservation
+            if analysis.get("dominant_elements"):
+                dominant_elements = ", ".join(analysis["dominant_elements"])
+                enhanced_prompt += f", preserve: {dominant_elements}"
             
         except Exception as e:
             logger.warning(f"Image analysis failed, using original prompt: {str(e)}")
@@ -1243,7 +1264,8 @@ async def generate_fusion_image_endpoint(
 @app.post("/api/fuse-reference")
 async def fuse_reference(
     prompt: str = Form(...),
-    files: list[UploadFile] = File(...)
+    files: list[UploadFile] = File(...),
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Generate an image using reference images for style/theme and a prompt for content/angle.
@@ -1260,6 +1282,339 @@ async def fuse_reference(
             reference_images.append(tmp.name)
     img_str = generate_reference_style_image(prompt, reference_images)
     return {"image": img_str}
+
+@app.post("/api/identity-preserve")
+async def identity_preserve(
+    prompt: str = Form(...),
+    files: list[UploadFile] = File(...),
+    ip_adapter_scale: float = Form(0.8),
+    guidance_scale: float = Form(7.5),
+    num_inference_steps: int = Form(30),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate an image that preserves the identity of a person from reference images
+    while allowing pose/scenario changes as specified in the prompt.
+    Uses IP-Adapter for identity preservation.
+    """
+    from PIL import Image
+    import tempfile
+    reference_images = []
+    for file in files:
+        contents = await file.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            tmp.write(contents)
+            tmp.flush()
+            reference_images.append(tmp.name)
+    img_str = generate_identity_preserving_image(
+        prompt, 
+        reference_images, 
+        ip_adapter_scale=ip_adapter_scale,
+        guidance_scale=guidance_scale,
+        num_inference_steps=num_inference_steps
+    )
+    return {"image": img_str}
+
+@app.post("/api/pose-transfer")
+async def pose_transfer(
+    prompt: str = Form(...),
+    files: list[UploadFile] = File(...),
+    strength: float = Form(0.8),
+    guidance_scale: float = Form(7.5),
+    num_inference_steps: int = Form(30),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate an image that transfers the pose/style from reference images
+    while maintaining identity and applying the new scenario from prompt.
+    """
+    from PIL import Image
+    import tempfile
+    reference_images = []
+    for file in files:
+        contents = await file.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            tmp.write(contents)
+            tmp.flush()
+            reference_images.append(tmp.name)
+    img_str = generate_pose_transfer_image(
+        prompt, 
+        reference_images, 
+        strength=strength,
+        guidance_scale=guidance_scale,
+        num_inference_steps=num_inference_steps
+    )
+    return {"image": img_str}
+
+@app.post("/api/theme-preserve")
+async def theme_preserve(
+    prompt: str = Form(...),
+    files: List[UploadFile] = File(...),
+    strength: float = Form(0.55),  # Optimized for better theme preservation
+    guidance_scale: float = Form(13.0),  # Higher for better prompt following
+    num_inference_steps: int = Form(90),  # More steps for better quality
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate an image that preserves the complete theme, props, objects, and visual style
+    from reference images while generating a new angle/view based on the prompt.
+    Optimized for "same world, new angle" generation.
+    """
+    try:
+        logger.info(f"Theme preservation request from user {current_user['username']}")
+        logger.info(f"Prompt: {prompt}")
+        logger.info(f"Number of reference images: {len(files)}")
+        
+        # Validate inputs
+        if len(files) < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one reference image is required"
+            )
+        
+        if len(files) > 10:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Maximum 10 reference images allowed"
+            )
+        
+        if not prompt.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Prompt cannot be empty"
+            )
+        
+        # Process uploaded images
+        processed_images = []
+        for i, uploaded_file in enumerate(files):
+            try:
+                # Validate file type
+                if not uploaded_file.content_type.startswith('image/'):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"File {uploaded_file.filename} is not an image"
+                    )
+                
+                # Read and process image
+                image_data = await uploaded_file.read()
+                image = Image.open(BytesIO(image_data))
+                
+                # Validate image size (max 10MB)
+                if len(image_data) > 10 * 1024 * 1024:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Image {uploaded_file.filename} is too large (max 10MB)"
+                    )
+                
+                processed_images.append(image)
+                logger.info(f"Processed image {i+1}: {uploaded_file.filename}")
+                
+            except Exception as e:
+                logger.error(f"Error processing image {uploaded_file.filename}: {str(e)}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error processing image {uploaded_file.filename}: {str(e)}"
+                )
+        
+        # Enhance prompt for better "same world, new angle" generation
+        enhanced_prompt = f"{prompt}, same world, same scene, same objects, same props, same lighting, same visual style, same color palette, same environment, same setting, only change the camera angle or viewpoint, preserve all visual elements"
+        
+        # Generate the theme-preserving image with enhanced parameters
+        logger.info("Starting theme-preserving image generation...")
+        generated_image = generate_fusion_image(
+            prompt=enhanced_prompt,
+            reference_images=processed_images,
+            model_name="runwayml/stable-diffusion-v1-5",
+            strength=strength,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps
+        )
+        
+        logger.info("Theme-preserving image generation completed successfully")
+        
+        return {
+            "image": generated_image,
+            "message": "Theme-preserving image generated successfully",
+            "processing_info": {
+                "device": "cuda" if torch.cuda.is_available() else "cpu",
+                "strength": strength,
+                "guidance_scale": guidance_scale,
+                "num_inference_steps": num_inference_steps,
+                "enhanced_prompt": enhanced_prompt
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in theme preservation: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate theme-preserving image: {str(e)}"
+        )
+
+# Test endpoint for debugging image generation
+@app.post("/test/image-generation")
+async def test_image_generation(
+    prompt: str = Form("a beautiful landscape"),
+    current_user: dict = Depends(get_current_user)
+):
+    """Simple test endpoint to verify image generation is working"""
+    try:
+        logger.info(f"Test image generation for prompt: '{prompt}'")
+        
+        # Generate a simple image without reference
+        image_data = generate_shot_image(
+            prompt=prompt,
+            model_name="runwayml/stable-diffusion-v1-5"
+        )
+        
+        return {
+            "success": True,
+            "image_url": image_data,
+            "prompt_used": prompt,
+            "message": "Test image generation successful"
+        }
+        
+    except Exception as e:
+        logger.error(f"Test image generation failed: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Test image generation failed"
+        }
+
+@app.post("/fusion/advanced-match")
+async def advanced_reference_matching(
+    prompt: str = Form(...),
+    reference_images: List[UploadFile] = File(...),
+    matching_type: str = Form("style"),  # "style", "identity", "pose", "theme"
+    strength: float = Form(0.6),  # Even lower for better preservation
+    guidance_scale: float = Form(12.0),  # Higher for better prompt following
+    num_inference_steps: int = Form(80),  # More steps for better quality
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Advanced reference image matching with specialized techniques for different types of matching.
+    
+    Args:
+        prompt: User's creative requirements/description
+        reference_images: List of uploaded reference images
+        matching_type: Type of matching - "style", "identity", "pose", "theme"
+        strength: How much to blend reference images (0.0-1.0)
+        guidance_scale: How closely to follow the prompt
+        num_inference_steps: Number of denoising steps
+        current_user: Authenticated user
+    
+    Returns:
+        Base64 encoded generated image
+    """
+    try:
+        logger.info(f"Advanced reference matching request from user {current_user['username']}")
+        logger.info(f"Matching type: {matching_type}")
+        logger.info(f"Number of reference images: {len(reference_images)}")
+        
+        # Validate inputs
+        if len(reference_images) < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one reference image is required"
+            )
+        
+        if matching_type not in ["style", "identity", "pose", "theme"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Matching type must be one of: style, identity, pose, theme"
+            )
+        
+        # Process uploaded images
+        processed_images = []
+        for i, uploaded_file in enumerate(reference_images):
+            try:
+                if not uploaded_file.content_type.startswith('image/'):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"File {uploaded_file.filename} is not an image"
+                    )
+                
+                image_data = await uploaded_file.read()
+                image = Image.open(BytesIO(image_data))
+                
+                if len(image_data) > 10 * 1024 * 1024:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Image {uploaded_file.filename} is too large (max 10MB)"
+                    )
+                
+                processed_images.append(image)
+                logger.info(f"Processed image {i+1}: {uploaded_file.filename}")
+                
+            except Exception as e:
+                logger.error(f"Error processing image {uploaded_file.filename}: {str(e)}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error processing image {uploaded_file.filename}: {str(e)}"
+                )
+        
+        # Choose the appropriate generation method based on matching type
+        if matching_type == "style":
+            # Use ControlNet Reference for style matching
+            generated_image = generate_reference_style_image(
+                prompt=prompt,
+                reference_images=processed_images,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale
+            )
+        elif matching_type == "identity":
+            # Use IP-Adapter for identity preservation
+            generated_image = generate_identity_preserving_image(
+                prompt=prompt,
+                reference_images=processed_images,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                ip_adapter_scale=strength
+            )
+        elif matching_type == "pose":
+            # Use pose transfer technique
+            generated_image = generate_pose_transfer_image(
+                prompt=prompt,
+                reference_images=processed_images,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                strength=strength
+            )
+        else:  # theme
+            # Use enhanced fusion for theme preservation
+            generated_image = generate_fusion_image(
+                prompt=prompt,
+                reference_images=processed_images,
+                strength=strength,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps
+            )
+        
+        logger.info(f"Advanced {matching_type} matching completed successfully")
+        
+        return {
+            "image_url": generated_image,
+            "matching_type": matching_type,
+            "prompt_used": prompt,
+            "processing_info": {
+                "device": "cuda" if torch.cuda.is_available() else "cpu",
+                "strength": strength,
+                "guidance_scale": guidance_scale,
+                "num_inference_steps": num_inference_steps
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in advanced reference matching: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate advanced reference matching: {str(e)}"
+        )
 
 # Register cleanup handler
 @atexit.register

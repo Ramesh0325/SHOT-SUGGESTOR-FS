@@ -1,39 +1,27 @@
 import React, { useState, useRef } from 'react';
 import {
   Box,
-  Button,
-  TextField,
   Typography,
+  Button,
   Paper,
   Grid,
   Card,
   CardMedia,
-  CardContent,
   IconButton,
-  Chip,
-  Slider,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
+  TextField,
   Alert,
   CircularProgress,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-  Tooltip,
-  Divider,
-  FormHelperText
+  Tooltip
 } from '@mui/material';
 import {
   CloudUpload,
   Delete,
-  ZoomIn,
-  Settings,
-  PlayArrow,
   Download,
-  Info,
+  Clear,
   AutoAwesome,
   Help
 } from '@mui/icons-material';
@@ -44,47 +32,22 @@ const ImageFusion = () => {
   const [referenceImages, setReferenceImages] = useState([]);
   const [prompt, setPrompt] = useState('');
   const [generatedImage, setGeneratedImage] = useState(null);
-  const [fusionLoading, setFusionLoading] = useState(false);
   const [error, setError] = useState('');
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
-  const [previewImage, setPreviewImage] = useState(null);
+  const [fusionLoading, setFusionLoading] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  
-  // Advanced settings
-  const [fusionMethod, setFusionMethod] = useState('blend'); // 'blend' or 'reference'
-  const [modelName, setModelName] = useState('runwayml/stable-diffusion-v1-5');
-  const [strength, setStrength] = useState(0.8);
-  const [guidanceScale, setGuidanceScale] = useState(8.5);
-  const [numInferenceSteps, setNumInferenceSteps] = useState(50);
-  
-  const fileInputRef = useRef(null);
+  const [previewImage, setPreviewImage] = useState(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState('');
+  const [progressStep, setProgressStep] = useState(0);
+  const fileInputRef = useRef();
 
   const handleImageUpload = (event) => {
     const files = Array.from(event.target.files);
-    
-    // Validate file types and sizes
-    const validFiles = files.filter(file => {
-      if (!file.type.startsWith('image/')) {
-        setError(`${file.name} is not an image file`);
-        return false;
-      }
-      if (file.size > 10 * 1024 * 1024) { // 10MB limit
-        setError(`${file.name} is too large (max 10MB)`);
-        return false;
-      }
-      return true;
-    });
-
-    if (validFiles.length === 0) return;
-
-    // Convert files to preview URLs
-    const newImages = validFiles.map(file => ({
+    const newImages = files.map(file => ({
       file,
-      preview: URL.createObjectURL(file),
-      name: file.name
+      name: file.name,
+      preview: URL.createObjectURL(file)
     }));
-
     setReferenceImages(prev => [...prev, ...newImages]);
     setError('');
   };
@@ -98,50 +61,46 @@ const ImageFusion = () => {
 
   const handlePreviewImage = (image) => {
     setPreviewImage(image);
-    setImagePreviewOpen(true);
+    setPreviewOpen(true);
   };
 
   const handleGenerateFusion = async () => {
-    if (!token) {
-      setError('You are not logged in. Please log in again.');
-      return;
-    }
-
     if (referenceImages.length === 0) {
       setError('Please upload at least one reference image');
       return;
     }
 
     if (!prompt.trim()) {
-      setError('Please enter a prompt');
+      setError('Please enter a description of the new angle/view');
       return;
     }
 
     setFusionLoading(true);
     setError('');
+    setProgressStep(0);
+    setGenerationProgress('Initializing...');
 
     try {
+      // Step 1: Preparing data
+      setProgressStep(1);
+      setGenerationProgress('Preparing reference images...');
+      
       const formData = new FormData();
       formData.append('prompt', prompt);
-      
-      // Add advanced settings based on fusion method
-      if (fusionMethod === 'blend') {
-        formData.append('model_name', modelName);
-        formData.append('strength', strength);
-        formData.append('guidance_scale', guidanceScale);
-        formData.append('num_inference_steps', numInferenceSteps);
-      }
+      // Backend now has optimized default parameters for better "same world, new angle" generation
+      // strength: 0.55, guidance_scale: 13.0, num_inference_steps: 90
+      // These are automatically applied by the backend for optimal results
 
+      // Add all reference images - use 'files' field name to match backend
       referenceImages.forEach((imageObj) => {
-        formData.append(fusionMethod === 'reference' ? 'files' : 'reference_images', imageObj.file);
+        formData.append('files', imageObj.file);
       });
 
-      // Choose endpoint based on fusion method
-      const endpoint = fusionMethod === 'reference' 
-        ? 'http://localhost:8000/api/fuse-reference'
-        : 'http://localhost:8000/fusion/generate';
+      // Step 2: Sending request
+      setProgressStep(2);
+      setGenerationProgress('Analyzing reference images...');
 
-      const response = await fetch(endpoint, {
+      const response = await fetch('http://localhost:8000/api/theme-preserve', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -158,16 +117,30 @@ const ImageFusion = () => {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate fusion image');
+        throw new Error(errorData.detail || 'Failed to generate theme-preserving image');
       }
 
+      // Step 3: Processing response
+      setProgressStep(3);
+      setGenerationProgress('Processing generated image...');
+
       const data = await response.json();
-      setGeneratedImage(data.image || data.image_url);
+      setGeneratedImage(data.image);
+
+      // Step 4: Complete
+      setProgressStep(4);
+      setGenerationProgress('Generation complete!');
 
     } catch (err) {
       setError(err.message);
+      setGenerationProgress('Generation failed');
     } finally {
       setFusionLoading(false);
+      // Clear progress after a delay
+      setTimeout(() => {
+        setGenerationProgress('');
+        setProgressStep(0);
+      }, 2000);
     }
   };
 
@@ -185,41 +158,28 @@ const ImageFusion = () => {
     setPrompt('');
     setGeneratedImage(null);
     setError('');
+    setGenerationProgress('');
+    setProgressStep(0);
   };
 
   return (
     <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto' }}>
       <Typography variant="h4" gutterBottom>
-        Image Fusion Generator
+        🎬 Same World, New Angle
       </Typography>
+      
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 3 }}>
         <Typography variant="body1" color="text.secondary" sx={{ flex: 1 }}>
-          Upload multiple reference images and provide a prompt to generate a single fused image. 
-          Choose between <strong>Blend Fusion</strong> (combines all references) or 
-          <strong> Reference Style Transfer</strong> (uses first image for style, prompt for content).
+          Upload images of your scene, then describe the angle you want. The AI will show you the exact same world from that new perspective - including elements not visible in your reference images. Uses optimized parameters for maximum world preservation.
         </Typography>
-        <Tooltip title="Learn how to use advanced settings">
+        <Tooltip title="Learn how to use this tool">
           <IconButton 
             size="small" 
             onClick={() => setHelpOpen(true)}
             sx={{ mt: -0.5 }}
           >
-            <Info color="primary" />
+            <Help color="primary" />
           </IconButton>
-        </Tooltip>
-      </Box>
-
-      {/* Fusion Method Indicator */}
-      <Box sx={{ mb: 2 }}>
-        <Tooltip title={`Current mode: ${fusionMethod === 'blend' ? 'Blend Fusion - combines all references' : 'Reference Style Transfer - uses first image for style'}. Click for detailed explanation.`}>
-          <Chip
-            icon={fusionMethod === 'reference' ? <AutoAwesome color="primary" /> : <AutoAwesome />}
-            label={fusionMethod === 'blend' ? 'Blend Fusion Mode' : 'Reference Style Transfer Mode'}
-            color={fusionMethod === 'reference' ? 'primary' : 'default'}
-            variant="outlined"
-            sx={{ cursor: 'pointer' }}
-            onClick={() => setHelpOpen(true)}
-          />
         </Tooltip>
       </Box>
 
@@ -234,7 +194,7 @@ const ImageFusion = () => {
         <Grid item xs={12} md={6}>
           <Paper sx={{ p: 3, height: 'fit-content' }}>
             <Typography variant="h6" gutterBottom>
-              Input Images & Prompt
+              📸 Your Scene Images
             </Typography>
 
             {/* Image Upload */}
@@ -254,12 +214,12 @@ const ImageFusion = () => {
                 fullWidth
                 sx={{ mb: 2 }}
               >
-                Upload Reference Images
+                Upload Scene Images (1-5 photos)
               </Button>
               
               {referenceImages.length > 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  {referenceImages.length} image(s) uploaded
+                  {referenceImages.length} scene image(s) uploaded
                 </Typography>
               )}
             </Box>
@@ -301,53 +261,78 @@ const ImageFusion = () => {
             )}
 
             {/* Prompt Input */}
-            <TextField
-              fullWidth
-              multiline
-              rows={4}
-              label="Describe your desired image"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe the image you want to generate, incorporating elements from your reference images..."
-              sx={{ mb: 3 }}
-            />
-
-            {/* Settings Buttons */}
-            <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
-              <Button
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="h6" gutterBottom>
+                🎯 Desired Angle
+              </Typography>
+              <TextField
+                fullWidth
+                multiline
+                rows={4}
                 variant="outlined"
-                startIcon={<Help />}
-                onClick={() => setHelpOpen(true)}
-                sx={{ flex: 1 }}
-              >
-                How to Use Settings
-              </Button>
-              <Button
-                variant="outlined"
-                startIcon={<Settings />}
-                onClick={() => setSettingsOpen(true)}
-                sx={{ flex: 1 }}
-              >
-                Advanced Settings
-              </Button>
+                placeholder="Describe the angle you want to see. Examples: 'Close-up from above', 'Show feet of the king', 'Camera at ground level', 'Behind the throne', 'Low angle shot', 'Bird's eye view'"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                sx={{ mb: 1 }}
+              />
+              <Typography variant="body2" color="text.secondary">
+                The AI will show you the same world from this new angle, including elements not visible in your reference images.
+              </Typography>
             </Box>
 
             {/* Generate Button */}
             <Button
               variant="contained"
-              startIcon={fusionLoading ? <CircularProgress size={20} /> : <PlayArrow />}
+              size="large"
+              fullWidth
               onClick={handleGenerateFusion}
               disabled={fusionLoading || referenceImages.length === 0 || !prompt.trim()}
-              fullWidth
+              startIcon={fusionLoading ? <CircularProgress size={20} /> : <AutoAwesome />}
               sx={{ mb: 2 }}
             >
-              {fusionLoading ? 'Generating...' : 'Generate Fusion Image'}
+              {fusionLoading ? 'Generating New Angle...' : 'Generate New Angle'}
             </Button>
 
+            {/* Progress Indicator */}
+            {fusionLoading && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="body2" color="primary" gutterBottom>
+                  {generationProgress}
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Box sx={{ flex: 1, bgcolor: 'grey.200', borderRadius: 1, height: 8 }}>
+                    <Box
+                      sx={{
+                        bgcolor: 'primary.main',
+                        height: '100%',
+                        borderRadius: 1,
+                        width: `${(progressStep / 4) * 100}%`,
+                        transition: 'width 0.3s ease'
+                      }}
+                    />
+                  </Box>
+                  <Typography variant="body2" color="text.secondary">
+                    {progressStep}/4
+                  </Typography>
+                </Box>
+                <Typography variant="caption" color="text.secondary">
+                  {progressStep === 1 && "Preparing your reference images for analysis..."}
+                  {progressStep === 2 && "AI is analyzing your scene and generating the new angle..."}
+                  {progressStep === 3 && "Processing the final image..."}
+                  {progressStep === 4 && "Ready! Your new angle is complete."}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  Using optimized parameters for maximum world preservation
+                </Typography>
+              </Box>
+            )}
+
+            {/* Clear Button */}
             <Button
               variant="outlined"
-              onClick={clearAll}
               fullWidth
+              onClick={clearAll}
+              startIcon={<Clear />}
             >
               Clear All
             </Button>
@@ -356,19 +341,14 @@ const ImageFusion = () => {
 
         {/* Right Panel - Output */}
         <Grid item xs={12} md={6}>
-          <Paper sx={{ p: 3, minHeight: 400 }}>
+          <Paper sx={{ p: 3, height: 'fit-content' }}>
             <Typography variant="h6" gutterBottom>
-              Generated Image
+              🖼️ Generated Image
             </Typography>
-
-            {fusionLoading ? (
-              <Box sx={{ textAlign: 'center', mt: 4 }}>
-                <CircularProgress />
-                <Typography>Generating image, please wait...</Typography>
-              </Box>
-            ) : generatedImage ? (
+            
+            {generatedImage ? (
               <Box>
-                <Card>
+                <Card sx={{ mb: 2 }}>
                   <CardMedia
                     component="img"
                     image={`data:image/png;base64,${generatedImage}`}
@@ -377,35 +357,24 @@ const ImageFusion = () => {
                     onClick={() => handlePreviewImage(`data:image/png;base64,${generatedImage}`)}
                   />
                 </Card>
-                <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
-                  <Button
-                    variant="outlined"
-                    startIcon={<ZoomIn />}
-                    onClick={() => handlePreviewImage(`data:image/png;base64,${generatedImage}`)}
-                  >
-                    View Full Size
-                  </Button>
-                  <Button
-                    variant="contained"
-                    startIcon={<Download />}
-                    onClick={handleDownload}
-                  >
-                    Download
-                  </Button>
-                </Box>
+                <Button
+                  variant="outlined"
+                  fullWidth
+                  onClick={handleDownload}
+                  startIcon={<Download />}
+                >
+                  Download Image
+                </Button>
               </Box>
             ) : (
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  height: 300,
-                  border: '2px dashed',
-                  borderColor: 'grey.300',
-                  borderRadius: 1
-                }}
-              >
+              <Box sx={{ 
+                height: 400, 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                border: '2px dashed #ccc',
+                borderRadius: 1
+              }}>
                 <Typography variant="body1" color="text.secondary">
                   Generated image will appear here
                 </Typography>
@@ -415,465 +384,116 @@ const ImageFusion = () => {
         </Grid>
       </Grid>
 
-      {/* Settings Dialog */}
-      <Dialog open={settingsOpen} onClose={() => setSettingsOpen(false)} maxWidth="md" fullWidth>
+      {/* Help Dialog */}
+      <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Settings />
-            Advanced Settings
-            <Tooltip title="Configure how your reference images are processed and fused">
-              <IconButton size="small">
-                <Info />
-              </IconButton>
-            </Tooltip>
+            <Help />
+            How to Use Same World, New Angle
           </Box>
         </DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 1 }}>
-            {/* Fusion Method Selection */}
-            <FormControl fullWidth sx={{ mb: 3 }}>
-              <InputLabel>Fusion Method</InputLabel>
-              <Select
-                value={fusionMethod}
-                onChange={(e) => setFusionMethod(e.target.value)}
-                label="Fusion Method"
-              >
-                <MenuItem value="blend">
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <AutoAwesome />
-                    Blend Fusion (Default)
-                  </Box>
-                </MenuItem>
-                <MenuItem value="reference">
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <AutoAwesome color="primary" />
-                    Reference Style Transfer (Advanced)
-                  </Box>
-                </MenuItem>
-              </Select>
-              <FormHelperText>
-                {fusionMethod === 'blend' 
-                  ? 'Blends all reference images together, then applies your prompt'
-                  : 'Uses the first reference image for style/theme, applies your prompt for content'
-                }
-              </FormHelperText>
-            </FormControl>
+            <Typography variant="h6" gutterBottom color="primary">
+              🎬 Simple 2-Step Process
+            </Typography>
+            
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              Upload images of your scene, describe the angle you want, and get the same world from that new perspective.
+            </Typography>
 
-            {fusionMethod === 'blend' && (
-              <>
-                <Divider sx={{ my: 2 }} />
-                <Typography variant="h6" gutterBottom>Blend Settings</Typography>
-                
-                <FormControl fullWidth sx={{ mb: 2 }}>
-                  <InputLabel>Model</InputLabel>
-                  <Select
-                    value={modelName}
-                    onChange={(e) => setModelName(e.target.value)}
-                    label="Model"
-                  >
-                    <MenuItem value="runwayml/stable-diffusion-v1-5">Stable Diffusion v1.5 (Recommended)</MenuItem>
-                    <MenuItem value="stabilityai/stable-diffusion-2-1">Stable Diffusion v2.1</MenuItem>
-                    <MenuItem value="runwayml/stable-diffusion-v1-5-inpainting">Stable Diffusion Inpainting</MenuItem>
-                  </Select>
-                </FormControl>
-
-                <Box sx={{ mb: 3 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <Typography gutterBottom>Strength: {strength}</Typography>
-                    <Tooltip title="Controls how much the reference images influence the final result. Higher values = more reference influence">
-                      <IconButton size="small">
-                        <Info />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                  <Slider
-                    value={strength}
-                    onChange={(e, value) => setStrength(value)}
-                    min={0.1}
-                    max={1.0}
-                    step={0.1}
-                    marks={[
-                      { value: 0.1, label: 'Light' },
-                      { value: 0.5, label: 'Balanced' },
-                      { value: 0.8, label: 'Strong' },
-                      { value: 1.0, label: 'Max' }
-                    ]}
-                  />
-                  <FormHelperText>
-                    {strength <= 0.3 ? 'Light blending - keeps more of original reference' :
-                     strength <= 0.6 ? 'Balanced fusion - good mix of reference and prompt' :
-                     strength <= 0.9 ? 'Strong blending - heavy reference influence' :
-                     'Maximum transformation - strongest reference influence'}
-                  </FormHelperText>
-                </Box>
-
-                <Box sx={{ mb: 3 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <Typography gutterBottom>Guidance Scale: {guidanceScale}</Typography>
-                    <Tooltip title="How closely the AI follows your prompt. Higher values = more prompt-following, less creative">
-                      <IconButton size="small">
-                        <Info />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                  <Slider
-                    value={guidanceScale}
-                    onChange={(e, value) => setGuidanceScale(value)}
-                    min={1.0}
-                    max={20.0}
-                    step={0.5}
-                    marks={[
-                      { value: 1.0, label: 'Creative' },
-                      { value: 7.5, label: 'Balanced' },
-                      { value: 15.0, label: 'Strict' },
-                      { value: 20.0, label: 'Very Strict' }
-                    ]}
-                  />
-                  <FormHelperText>
-                    {guidanceScale <= 5.0 ? 'Creative - less prompt-following, more artistic freedom' :
-                     guidanceScale <= 10.0 ? 'Balanced - good mix of creativity and prompt adherence' :
-                     guidanceScale <= 15.0 ? 'Strict - closely follows your prompt' :
-                     'Very strict - maximum prompt adherence, minimal creativity'}
-                  </FormHelperText>
-                </Box>
-
-                <Box sx={{ mb: 3 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <Typography gutterBottom>Inference Steps: {numInferenceSteps}</Typography>
-                    <Tooltip title="Number of denoising steps. Higher values = better quality but slower generation">
-                      <IconButton size="small">
-                        <Info />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                  <Slider
-                    value={numInferenceSteps}
-                    onChange={(e, value) => setNumInferenceSteps(value)}
-                    min={20}
-                    max={100}
-                    step={5}
-                    marks={[
-                      { value: 20, label: 'Fast' },
-                      { value: 50, label: 'Good' },
-                      { value: 80, label: 'High' },
-                      { value: 100, label: 'Max' }
-                    ]}
-                  />
-                  <FormHelperText>
-                    {numInferenceSteps <= 30 ? 'Fast generation, lower quality' :
-                     numInferenceSteps <= 60 ? 'Good balance of speed and quality' :
-                     numInferenceSteps <= 80 ? 'Higher quality, slower generation' :
-                     'Maximum quality, very slow generation'}
-                  </FormHelperText>
-                </Box>
-              </>
-            )}
-
-            {fusionMethod === 'reference' && (
-              <>
-                <Divider sx={{ my: 2 }} />
-                <Typography variant="h6" gutterBottom>Reference Style Transfer</Typography>
-                <Alert severity="info" sx={{ mb: 2 }}>
-                  <Typography variant="body2">
-                    <strong>How it works:</strong> Uses the first reference image for style/theme, 
-                    then applies your prompt to create new content in that style. 
-                    This is more advanced than simple blending and creates more stylistically consistent results.
-                  </Typography>
-                </Alert>
-                <Typography variant="body2" color="text.secondary">
-                  • The first image you upload will be used as the style reference<br/>
-                  • Your prompt describes the new content/angle you want<br/>
-                  • The result will match the style of your reference but show new content<br/>
-                  • Best for creating variations in the same visual style
+            <Typography variant="h6" gutterBottom>
+              📋 Step-by-Step Guide:
+            </Typography>
+            
+            <Box component="ul" sx={{ pl: 2, mb: 2 }}>
+              <li>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  <strong>Upload Scene Images:</strong> Upload 1-5 photos of the scene/location you want to explore from different angles.
                 </Typography>
-              </>
-            )}
+              </li>
+              <li>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  <strong>Describe Your Angle:</strong> Tell the AI what angle you want to see. Examples:
+                </Typography>
+                <Box component="ul" sx={{ pl: 2, mb: 1 }}>
+                  <li>"Close-up from above"</li>
+                  <li>"Show feet of the king"</li>
+                  <li>"Camera at ground level"</li>
+                  <li>"Behind the throne"</li>
+                  <li>"Low angle shot"</li>
+                  <li>"Bird's eye view"</li>
+                  <li>"From the other side"</li>
+                </Box>
+              </li>
+              <li>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  <strong>Generate:</strong> Click the button and see your same world from the new angle.
+                </Typography>
+              </li>
+            </Box>
+
+            <Typography variant="h6" gutterBottom color="success.main">
+              ✅ What You Get:
+            </Typography>
+            
+            <Box component="ul" sx={{ pl: 2, mb: 2 }}>
+              <li>Same scene, same objects, same lighting</li>
+              <li>Same visual style and color palette</li>
+              <li>New perspective as requested</li>
+              <li>Elements not visible in your references (generated consistently)</li>
+              <li>Optimized AI parameters for maximum world preservation</li>
+            </Box>
+
+            <Typography variant="h6" gutterBottom color="warning.main">
+              💡 Pro Tips:
+            </Typography>
+            
+            <Box component="ul" sx={{ pl: 2, mb: 2 }}>
+              <li><strong>Hidden Elements:</strong> Request parts not visible in your images (e.g., "feet of the king", "back of the throne")</li>
+              <li><strong>New Perspectives:</strong> Ask for angles that reveal new elements (e.g., "from below", "behind the subject")</li>
+              <li><strong>Close-ups:</strong> Request detailed views (e.g., "close-up of the crown", "hands holding the sword")</li>
+              <li><strong>Different Heights:</strong> Change viewing height (e.g., "ground level", "bird's eye view")</li>
+              <li><strong>Multiple References:</strong> Upload 2-3 images of the same scene for better world understanding</li>
+            </Box>
+
+            <Alert severity="info" sx={{ mb: 2 }}>
+              <Typography variant="body2">
+                <strong>How it works:</strong> The AI analyzes your scene images to understand the complete visual world, then generates the same world from your requested angle - including elements not visible in your reference images. Uses optimized parameters (strength: 0.55, guidance: 13.0, steps: 90) for maximum world preservation.
+              </Typography>
+            </Alert>
+            
+            <Alert severity="success" sx={{ mb: 2 }}>
+              <Typography variant="body2">
+                <strong>Perfect for:</strong> Film pre-production, set design, storyboarding, photography planning, and visualizing scenes from different angles.
+              </Typography>
+            </Alert>
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSettingsOpen(false)}>Close</Button>
+          <Button onClick={() => setHelpOpen(false)}>Got it!</Button>
         </DialogActions>
       </Dialog>
 
       {/* Image Preview Dialog */}
-      <Dialog
-        open={imagePreviewOpen}
-        onClose={() => setImagePreviewOpen(false)}
-        maxWidth="lg"
+      <Dialog 
+        open={previewOpen} 
+        onClose={() => setPreviewOpen(false)} 
+        maxWidth="lg" 
         fullWidth
       >
-        <DialogContent sx={{ p: 0 }}>
+        <DialogTitle>Image Preview</DialogTitle>
+        <DialogContent>
           {previewImage && (
-            <img
-              src={previewImage}
-              alt="Preview"
-              style={{ width: '100%', height: 'auto' }}
+            <img 
+              src={previewImage} 
+              alt="Preview" 
+              style={{ width: '100%', height: 'auto' }} 
             />
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setImagePreviewOpen(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Help Dialog */}
-      <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="lg" fullWidth>
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Help color="primary" />
-            How to Use Advanced Settings
-          </Box>
-        </DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 1 }}>
-            <Typography variant="h6" gutterBottom color="primary">
-              🎯 Understanding Fusion Methods
-            </Typography>
-            
-            <Grid container spacing={3} sx={{ mb: 3 }}>
-              <Grid item xs={12} md={6}>
-                <Card sx={{ p: 2, height: '100%' }}>
-                  <Typography variant="h6" gutterBottom>
-                    <AutoAwesome /> Blend Fusion (Default)
-                  </Typography>
-                  <Typography variant="body2" paragraph>
-                    <strong>How it works:</strong> All your reference images are blended together, then your prompt is applied to create the final image.
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    ✅ <strong>Best for:</strong> Combining multiple references<br/>
-                    ✅ <strong>Use when:</strong> You want elements from all images<br/>
-                    ✅ <strong>Result:</strong> Balanced mix of all references + your prompt
-                  </Typography>
-                </Card>
-              </Grid>
-              
-              <Grid item xs={12} md={6}>
-                <Card sx={{ p: 2, height: '100%', borderColor: 'primary.main' }}>
-                  <Typography variant="h6" gutterBottom color="primary">
-                    <AutoAwesome color="primary" /> Reference Style Transfer (Advanced)
-                  </Typography>
-                  <Typography variant="body2" paragraph>
-                    <strong>How it works:</strong> Uses the first image for style/theme, then applies your prompt to create new content in that style.
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    ✅ <strong>Best for:</strong> Style consistency<br/>
-                    ✅ <strong>Use when:</strong> You want the same style but different content<br/>
-                    ✅ <strong>Result:</strong> New content in the style of your first reference
-                  </Typography>
-                </Card>
-              </Grid>
-            </Grid>
-
-            <Divider sx={{ my: 3 }} />
-            
-            <Typography variant="h6" gutterBottom color="primary">
-              🎛️ Parameter Settings Guide
-            </Typography>
-
-            <Grid container spacing={2} sx={{ mb: 3 }}>
-              <Grid item xs={12} md={4}>
-                <Card sx={{ p: 2, height: '100%' }}>
-                  <Typography variant="h6" gutterBottom>
-                    💪 Strength (0.1 - 1.0)
-                  </Typography>
-                  <Typography variant="body2" paragraph>
-                    Controls how much your reference images influence the result.
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="success.main">
-                      <strong>0.1-0.3:</strong> Light blending - subtle changes
-                    </Typography>
-                    <Typography variant="body2" color="info.main">
-                      <strong>0.4-0.6:</strong> Balanced - good mix (recommended)
-                    </Typography>
-                    <Typography variant="body2" color="warning.main">
-                      <strong>0.7-0.9:</strong> Strong - heavy reference influence
-                    </Typography>
-                    <Typography variant="body2" color="error.main">
-                      <strong>1.0:</strong> Maximum - strongest influence
-                    </Typography>
-                  </Box>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} md={4}>
-                <Card sx={{ p: 2, height: '100%' }}>
-                  <Typography variant="h6" gutterBottom>
-                    🎯 Guidance Scale (1.0 - 20.0)
-                  </Typography>
-                  <Typography variant="body2" paragraph>
-                    How closely the AI follows your prompt vs. being creative.
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="success.main">
-                      <strong>1.0-5.0:</strong> Creative - more artistic freedom
-                    </Typography>
-                    <Typography variant="body2" color="info.main">
-                      <strong>6.0-10.0:</strong> Balanced - good mix (recommended)
-                    </Typography>
-                    <Typography variant="body2" color="warning.main">
-                      <strong>11.0-15.0:</strong> Strict - closely follows prompt
-                    </Typography>
-                    <Typography variant="body2" color="error.main">
-                      <strong>16.0-20.0:</strong> Very strict - maximum adherence
-                    </Typography>
-                  </Box>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} md={4}>
-                <Card sx={{ p: 2, height: '100%' }}>
-                  <Typography variant="h6" gutterBottom>
-                    ⚡ Inference Steps (20 - 100)
-                  </Typography>
-                  <Typography variant="body2" paragraph>
-                    Number of processing steps - more steps = better quality but slower.
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body2" color="success.main">
-                      <strong>20-30:</strong> Fast - quick results, lower quality
-                    </Typography>
-                    <Typography variant="body2" color="info.main">
-                      <strong>35-60:</strong> Good balance - recommended
-                    </Typography>
-                    <Typography variant="body2" color="warning.main">
-                      <strong>65-80:</strong> High quality - slower generation
-                    </Typography>
-                    <Typography variant="body2" color="error.main">
-                      <strong>85-100:</strong> Maximum quality - very slow
-                    </Typography>
-                  </Box>
-                </Card>
-              </Grid>
-            </Grid>
-
-            <Divider sx={{ my: 3 }} />
-
-            <Typography variant="h6" gutterBottom color="primary">
-              🚀 Recommended Settings for Different Use Cases
-            </Typography>
-
-            <Grid container spacing={2} sx={{ mb: 3 }}>
-              <Grid item xs={12} md={6}>
-                <Card sx={{ p: 2, borderColor: 'success.main' }}>
-                  <Typography variant="h6" gutterBottom color="success.main">
-                    🎨 Style Transfer
-                  </Typography>
-                  <Typography variant="body2" paragraph>
-                    <strong>Goal:</strong> Keep the style of your reference but change the content
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    <strong>Method:</strong> Reference Style Transfer<br/>
-                    <strong>Strength:</strong> 0.7-0.9<br/>
-                    <strong>Guidance:</strong> 7.0-9.0<br/>
-                    <strong>Steps:</strong> 50-70
-                  </Typography>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <Card sx={{ p: 2, borderColor: 'info.main' }}>
-                  <Typography variant="h6" gutterBottom color="info.main">
-                    🔄 Creative Blending
-                  </Typography>
-                  <Typography variant="body2" paragraph>
-                    <strong>Goal:</strong> Combine elements from multiple references
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    <strong>Method:</strong> Blend Fusion<br/>
-                    <strong>Strength:</strong> 0.5-0.7<br/>
-                    <strong>Guidance:</strong> 6.0-8.0<br/>
-                    <strong>Steps:</strong> 40-60
-                  </Typography>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <Card sx={{ p: 2, borderColor: 'warning.main' }}>
-                  <Typography variant="h6" gutterBottom color="warning.main">
-                    ⚡ Fast Iteration
-                  </Typography>
-                  <Typography variant="body2" paragraph>
-                    <strong>Goal:</strong> Quick testing of ideas and concepts
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    <strong>Method:</strong> Blend Fusion<br/>
-                    <strong>Strength:</strong> 0.6-0.8<br/>
-                    <strong>Guidance:</strong> 7.0-9.0<br/>
-                    <strong>Steps:</strong> 25-35
-                  </Typography>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <Card sx={{ p: 2, borderColor: 'error.main' }}>
-                  <Typography variant="h6" gutterBottom color="error.main">
-                    🏆 High Quality Output
-                  </Typography>
-                  <Typography variant="body2" paragraph>
-                    <strong>Goal:</strong> Best possible quality for final results
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    <strong>Method:</strong> Either<br/>
-                    <strong>Strength:</strong> 0.6-0.8<br/>
-                    <strong>Guidance:</strong> 8.0-10.0<br/>
-                    <strong>Steps:</strong> 70-90
-                  </Typography>
-                </Card>
-              </Grid>
-            </Grid>
-
-            <Divider sx={{ my: 3 }} />
-
-            <Typography variant="h6" gutterBottom color="primary">
-              💡 Pro Tips
-            </Typography>
-
-            <Alert severity="info" sx={{ mb: 2 }}>
-              <Typography variant="body2">
-                <strong>Start Simple:</strong> Begin with default settings and adjust based on results
-              </Typography>
-            </Alert>
-
-            <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
-                <Typography variant="body2" component="div">
-                  <strong>🎯 Quick Tips:</strong>
-                  <ul>
-                    <li>Higher strength = more reference influence</li>
-                    <li>Higher guidance = more prompt-following</li>
-                    <li>More steps = better quality but slower</li>
-                    <li>Reference mode for style consistency</li>
-                    <li>Blend mode for combining multiple references</li>
-                  </ul>
-                </Typography>
-              </Grid>
-              
-              <Grid item xs={12} md={6}>
-                <Typography variant="body2" component="div">
-                  <strong>⚠️ Common Mistakes:</strong>
-                  <ul>
-                    <li>Setting strength too high (over 0.9)</li>
-                    <li>Using too many steps for testing</li>
-                    <li>Not considering fusion method for your goal</li>
-                    <li>Setting guidance too low for specific results</li>
-                  </ul>
-                </Typography>
-              </Grid>
-            </Grid>
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setHelpOpen(false)}>Close</Button>
-          <Button 
-            variant="contained" 
-            onClick={() => {
-              setHelpOpen(false);
-              setSettingsOpen(true);
-            }}
-          >
-            Open Advanced Settings
-          </Button>
+          <Button onClick={() => setPreviewOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>

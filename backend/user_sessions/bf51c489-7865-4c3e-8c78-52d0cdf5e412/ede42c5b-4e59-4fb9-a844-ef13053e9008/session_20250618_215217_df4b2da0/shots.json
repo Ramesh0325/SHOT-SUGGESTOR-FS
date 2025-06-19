@@ -1,0 +1,28 @@
+[
+  {
+    "shot_number": 1,
+    "shot_description": "A slow, continuous shot moving alongside a first responder navigating debris-filled streets, camera mounted on a stabilized rig",
+    "explanation": "This conveys the scale of the destruction while emphasizing the responder's determination and struggle against the chaotic environment.",
+    "metadata": {
+      "camera_angle": "Tracking Long Shot",
+      "camera_movement": "Static",
+      "framing": "Tracking Long Shot",
+      "lighting": "Natural lighting",
+      "visual_elements": "Standard composition",
+      "emotional_impact": "neutral"
+    }
+  },
+  {
+    "shot_number": 2,
+    "shot_description": "Starting at street level, focusing on a small group of survivors huddled together, the camera slowly rises vertically to reveal the full extent of the earthquake's damage around them",
+    "explanation": "This shot juxtaposes the vulnerability of the survivors with the immensity of the disaster, highlighting their isolation and the overwhelming odds they face.",
+    "metadata": {
+      "camera_angle": "Crane Shot (Rising)",
+      "camera_movement": "Static",
+      "framing": "Crane Shot (Rising)",
+      "lighting": "Natural lighting",
+      "visual_elements": "Standard composition",
+      "emotional_impact": "neutral"
+    }
+  }
+]
