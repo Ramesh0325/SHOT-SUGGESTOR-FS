@@ -18,12 +18,11 @@ import {
 import axios from 'axios';
 import { useAuth } from './contexts/AuthContext';
 
-const ShotOutputPage = ({ shots: propShots, images: propImages, handleGenerateImage }) => {
+const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, handleGenerateImage }) => {
   const { sessionId } = useParams();
   const location = useLocation();
   const { user } = useAuth();
-  
-  const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState(null);
   const [sessionData, setSessionData] = useState({
     shots: propShots || location.state?.shotData || [],
@@ -32,8 +31,7 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, handleGenerateIm
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarSeverity, setSnackbarSeverity] = useState('info');
-  
-  useEffect(() => {
+    useEffect(() => {
     // If we have session ID but no data, load it from the API
     if (sessionId && (!location.state || !location.state.shotData)) {
       fetchSessionData();
@@ -65,7 +63,7 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, handleGenerateIm
       fetchSessionData();
     }
   };
-  const fetchSessionData = async () => {
+    const fetchSessionData = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
@@ -96,9 +94,8 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, handleGenerateIm
       return false; // Failed to fetch data
     } finally {
       setLoading(false);
-    }
-  };
-
+    }  };
+  
   // Function to generate an image for a shot
   const handleGenerateImageForShot = async (shot, index) => {
     if (!shot) return;
@@ -212,9 +209,12 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, handleGenerateIm
                     <button
                       className="generate-btn"
                       onClick={() => handleGenerateImage(shot, idx)}
+                      disabled={shotLoading[idx]}
                       style={{ marginLeft: '8px', minWidth: '120px' }}
                     >
-                      Generate Image
+                      {shotLoading[idx] ? (
+                        <span className="spinner" style={{ display: 'inline-block', width: 18, height: 18, border: '2px solid #1976d2', borderTop: '2px solid #fff', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></span>
+                      ) : 'Generate Image'}
                     </button>
                   )}
                 </div>
@@ -231,6 +231,9 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, handleGenerateIm
             </li>
           ))}
         </ul>
+        <style>{`
+          @keyframes spin { 100% { transform: rotate(360deg); } }
+        `}</style>
       </div>
     );
   }
@@ -266,10 +269,9 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, handleGenerateIm
 
         <Divider sx={{ my: 3 }} />
 
-        <Box sx={{ mt: 4 }}>
-          <Typography variant="h5" gutterBottom>
-            Shot Suggestions
-          </Typography>
+        <Typography variant="h6" gutterBottom>
+          Shot Suggestions
+        </Typography>        <Grid container spacing={3}>
           {sessionData.shots && sessionData.shots.length > 0 ? (
             sessionData.shots.map((shot, index) => (
               <Grid item xs={12} key={index}>
@@ -394,13 +396,10 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, handleGenerateIm
               </Grid>
             ))
           ) : (
-            <Box sx={{ textAlign: 'center', my: 4 }}>
-              <Typography color="text.secondary">
-                No shots generated yet. If you refreshed during generation, please try again.
-              </Typography>
-            </Box>
+            <Grid item xs={12}>
+              <Typography>No shot data available</Typography>            </Grid>
           )}
-        </Box>
+        </Grid>
       </Paper>
         {/* Feedback Snackbar */}
       <Snackbar
