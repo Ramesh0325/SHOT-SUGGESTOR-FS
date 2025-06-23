@@ -18,9 +18,9 @@ from db import (    init_db, create_user, authenticate_user, get_user_by_usernam
     list_file_system_sessions, get_filesystem_session_data, save_shots_to_filesystem,
     get_db_connection, save_shot_version, get_shot_versions, close_db_connection, 
     list_project_sessions, SESSIONS_ROOT, save_enhanced_shots_to_project, 
-    save_shot_image_to_project, PROJECT_IMAGES_ROOT
+    PROJECT_IMAGES_ROOT, save_fusion_session_to_project, get_session_by_id
 )
-from model import gemini, generate_shot_image, generate_fusion_image, analyze_reference_images, generate_reference_style_image, generate_identity_preserving_image, generate_pose_transfer_image, generate_multi_view_fusion, extract_detailed_image_description, merge_image_descriptions_with_prompt, generate_enhanced_negative_prompt
+from model import gemini, generate_shot_image, generate_fusion_image, analyze_reference_images, generate_reference_style_image, generate_identity_preserving_image, generate_pose_transfer_image, generate_multi_view_fusion, extract_detailed_image_description, merge_image_descriptions_with_prompt, generate_enhanced_negative_prompt, generate_image_from_text_prompt
 import json
 from dotenv import load_dotenv
 import sqlite3
@@ -712,36 +712,43 @@ async def generate_shot_image_endpoint(
         logger.info("Image generation successful")
         
         # Prepare response
-        response = {"image_url": image_data}
-
-        # Save image to enhanced project structure if we have the necessary info
+        response = {"image_url": image_data}        # Save image to enhanced project structure if we have the necessary info
         if project_id and session_id and shot_index is not None:
             try:
                 shot_idx = int(shot_index) if shot_index else None
                 
                 if shot_idx is not None:
-                    # Save image as file to project structure
-                    image_save_result = save_shot_image_to_project(
-                        user_id=current_user["id"],
-                        project_id=project_id,
-                        session_id=session_id,
-                        shot_index=shot_idx,
-                        image_data=image_data,
-                        shot_data={
-                            "description": shot_description,
-                            "model_name": model_name,
-                            "generated_at": datetime.now().isoformat()
-                        }
-                    )
-                    
-                    if image_save_result:
+                    # Create a simple project image save
+                    try:
+                        import base64
+                        import os
+                        from datetime import datetime
+                        
+                        # Create project images directory
+                        project_images_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id or "default")
+                        os.makedirs(project_images_dir, exist_ok=True)
+                        
+                        # Save image file
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        image_filename = f"shot_{shot_idx}_{timestamp}.png"
+                        image_path = os.path.join(project_images_dir, image_filename)
+                        
+                        # Decode and save image
+                        image_bytes = base64.b64decode(image_data)
+                        with open(image_path, 'wb') as f:
+                            f.write(image_bytes)
+                        
                         response["saved_to_project"] = True
-                        response["image_file_path"] = image_save_result["image_path"]
-                        response["image_filename"] = image_save_result["image_filename"]
-                        logger.info(f"Image saved to project: {image_save_result['image_path']}")
-                    else:
-                        logger.error("Failed to save image to project structure")
+                        response["image_file_path"] = image_path
+                        response["image_filename"] = image_filename
+                        logger.info(f"Shot image saved to: {image_path}")
+                        
+                    except Exception as save_error:
+                        logger.error(f"Error saving shot image: {save_error}")
                         response["saved_to_project"] = False
+                else:
+                    logger.error("Failed to save image to project structure - invalid shot index")
+                    response["saved_to_project"] = False
                         
             except Exception as project_save_error:
                 logger.error(f"Error saving image to project: {str(project_save_error)}")
@@ -1144,13 +1151,86 @@ async def list_project_sessions_api(
     project_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    """List all sessions for a specific project"""
-    # Get sessions for this project from filesystem
+    """List all sessions for a specific project"""    # Get sessions for this project from filesystem
     sessions = list_project_sessions(current_user["id"], project_id)
     if not sessions:
         return []
     
     return sorted(sessions, key=lambda x: x.get('created_at', ''), reverse=True)
+
+@app.post("/fusion/generate-image")
+async def fusion_generate_image_with_final_prompt(
+    final_prompt: str = Form(...),
+    project_id: str = Form(None),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate fusion image using the final prompt that already contains
+    the analysis of reference images + user's desired angle.
+    """
+    try:
+        logger.info(f"Fusion generate-image from user {current_user['username']}")
+        logger.info(f"Final prompt: {final_prompt[:200]}...")
+        
+        if not final_prompt.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Final prompt cannot be empty"
+            )
+        
+        # Import the function        # Generate image using text-to-image with the final prompt and optimized parameters
+        generated_image = generate_image_from_text_prompt(
+            prompt=final_prompt,
+            num_inference_steps=30,  # Optimized for better speed/quality balance
+            guidance_scale=8.0       # Better prompt following
+        )
+        
+        logger.info("Image generation completed successfully")
+        
+        # Save the fusion session data to project if project_id is provided
+        saved_data = None
+        if project_id:
+            try:
+                # Save fusion data to project structure
+                saved_data = save_fusion_session_to_project(
+                    user_id=current_user["id"],
+                    project_id=project_id,
+                    final_prompt=final_prompt,
+                    generated_image=generated_image
+                )
+                
+                if saved_data:
+                    logger.info(f"Fusion session saved to project {project_id}")
+                else:
+                    logger.warning("Failed to save fusion session to project")
+                    
+            except Exception as save_error:
+                logger.error(f"Error saving fusion session: {str(save_error)}")
+        
+        response_data = {
+            "success": True,
+            "image_data": generated_image,
+            "prompt_used": final_prompt,
+            "message": "Image generated successfully using final prompt"
+        }
+        
+        # Add save information if data was saved
+        if saved_data:
+            response_data["saved_to_project"] = True
+            response_data["session_info"] = {
+                "session_id": saved_data["session_id"],
+                "session_dir": saved_data["session_dir"],
+                "images_dir": saved_data["images_dir"]
+            }
+        
+        return response_data
+        
+    except Exception as e:
+        logger.error(f"Error in fusion generate-image: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate image: {str(e)}"
+        )
 
 @app.post("/fusion/generate")
 async def generate_fusion_image_endpoint(
@@ -1237,7 +1317,7 @@ async def generate_fusion_image_endpoint(
                     )
                 
                 processed_images.append(image)
-                logger.info(f"Processed image {i+1}: {uploaded_file.filename}")
+                logger.info(f"Processed reference image {i+1}: {uploaded_file.filename}")
                 
             except Exception as e:
                 logger.error(f"Error processing image {uploaded_file.filename}: {str(e)}")
@@ -2027,7 +2107,7 @@ async def analyze_images(
                 logger.error(f"Error analyzing image {uploaded_file.filename}: {str(e)}")
                 image_analyses.append({
                     "filename": uploaded_file.filename,
-                    "status": "error",
+                                       "status": "error",
                     "error": f"Analysis failed: {str(e)}",
                     "description": None
                 })
@@ -2159,5 +2239,177 @@ async def startup_event():
     """Initialize database on startup"""
     init_db()
 
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+@app.get("/projects/{project_id}/sessions/{session_id}/details")
+async def get_project_session_details(
+    project_id: str,
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get detailed session data from project folder including input/output files
+    """
+    try:
+        logger.info(f"Getting session details for project {project_id}, session {session_id}")
+        
+        # Get session from database first
+        from db import get_session_by_id
+        session = get_session_by_id(session_id)
+        
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found"
+            )
+        
+        # Check if user owns the session
+        if session['user_id'] != current_user['id']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this session"
+            )
+        
+        # Load actual data from project folder files
+        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
+        
+        # Find session folder by searching for session name
+        session_folder = None
+        if os.path.exists(project_dir):
+            for folder in os.listdir(project_dir):
+                if session_id[:8] in folder:  # Match session ID prefix
+                    session_folder = os.path.join(project_dir, folder)
+                    break
+        
+        if not session_folder or not os.path.exists(session_folder):
+            # Return basic session data if folder not found
+            return {
+                "session": session,
+                "has_files": False,
+                "message": "Session data files not found in project folder"
+            }
+        
+        # Load input.json
+        input_data = None
+        input_file = os.path.join(session_folder, "input.json")
+        if os.path.exists(input_file):
+            try:
+                with open(input_file, 'r') as f:
+                    input_data = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading input file: {e}")
+        
+        # Load shots.json (for shot suggestion sessions)
+        shots_data = None
+        shots_file = os.path.join(session_folder, "shots.json")
+        if os.path.exists(shots_file):
+            try:
+                with open(shots_file, 'r') as f:
+                    shots_data = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading shots file: {e}")
+        
+        # Load output.json (for image fusion sessions)
+        output_data = None
+        output_file = os.path.join(session_folder, "output.json")
+        if os.path.exists(output_file):
+            try:
+                with open(output_file, 'r') as f:
+                    output_data = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading output file: {e}")
+        
+        # List generated images
+        images_dir = os.path.join(session_folder, "images")
+        image_files = []
+        if os.path.exists(images_dir):
+            for file in os.listdir(images_dir):
+                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    image_files.append({
+                        "filename": file,
+                        "path": os.path.join(images_dir, file),
+                        "url": f"/projects/{project_id}/sessions/{session_id}/images/{file}"
+                    })
+        
+        return {
+            "session": session,
+            "has_files": True,
+            "session_folder": session_folder,
+            "input_data": input_data,
+            "shots_data": shots_data,
+            "output_data": output_data,
+            "image_files": image_files,
+            "file_summary": {
+                "has_input": input_data is not None,
+                "has_shots": shots_data is not None,
+                "has_output": output_data is not None,
+                "image_count": len(image_files)
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting session details: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get session details: {str(e)}"
+        )
+
+@app.get("/projects/{project_id}/sessions/{session_id}/images/{filename}")
+async def get_session_image(
+    project_id: str,
+    session_id: str,
+    filename: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Serve image files from project session folders
+    """
+    try:
+        # Security check: validate filename to prevent directory traversal
+        if '..' in filename or '/' in filename or '\\' in filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid filename"
+            )
+        
+        # Find session folder
+        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
+        session_folder = None
+        
+        if os.path.exists(project_dir):
+            for folder in os.listdir(project_dir):
+                if session_id[:8] in folder:  # Match session ID prefix
+                    session_folder = os.path.join(project_dir, folder)
+                    break
+        
+        if not session_folder:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session folder not found"
+            )
+        
+        # Construct image path
+        image_path = os.path.join(session_folder, "images", filename)
+        
+        if not os.path.exists(image_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Image file not found"
+            )
+        
+        # Return the image file
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            path=image_path,
+            media_type="image/png",
+            filename=filename
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving session image: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to serve image: {str(e)}"
+        )

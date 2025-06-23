@@ -204,20 +204,23 @@ const ImageFusion = ({ projectId }) => {
       }      const data = await response.json();
       setCombinedPrompt(data.combined_prompt);
       setCombinedPromptData(data);
-      
-      // Automatically generate and set the final prompt combining AI analysis with user angle
+        // Create a comprehensive final prompt that properly combines everything
       const combinedAnalysis = data.combined_prompt || '';
-      const finalPromptText = `${combinedAnalysis}, viewed from ${prompt}`.trim();
-      setFinalPrompt(finalPromptText);
+      
+      // Create comprehensive final prompt for identity preservation
+      const comprehensiveFinalPrompt = `${combinedAnalysis}`.trim();
+      
+      setFinalPrompt(comprehensiveFinalPrompt);
       setShowFinalPrompt(true);
       setCurrentStep(4); // Move to final prompt editing step
+      
+      console.log('Generated identity-preserving final prompt:', comprehensiveFinalPrompt);
 
     } catch (err) {
       setError(err.message);
     } finally {
       setPromptPreviewLoading(false);
     }  };
-
   const handleGenerateImage = async () => {
     if (!finalPrompt.trim()) {
       setError('Please enter a final prompt');
@@ -232,25 +235,23 @@ const ImageFusion = ({ projectId }) => {
     try {
       // Step 1: Preparing data
       setProgressStep(1);
-      setGenerationProgress('Preparing reference images...');
+      setGenerationProgress('Preparing final prompt...');
       
       const formData = new FormData();
-      formData.append('prompt', finalPrompt);
-
-      // Add all reference images
-      referenceImages.forEach((imageObj) => {
-        formData.append('files', imageObj.file);
-      });
+      formData.append('final_prompt', finalPrompt); // Send the complete final prompt
+      
+      if (projectId) {
+        formData.append('project_id', projectId);
+      }
 
       // Step 2: Sending request
       setProgressStep(2);
-      setGenerationProgress('Analyzing reference images...');
+      setGenerationProgress('Generating image with final prompt...');
 
-      // Use enhanced fusion endpoint
-      const endpoint = 'http://localhost:8000/api/enhanced-fusion';
-      setGenerationProgress('Analyzing images with AI vision...');
+      console.log('Sending final prompt to backend:', finalPrompt);
 
-      const response = await fetch(endpoint, {
+      // Use text-to-image generation with the final prompt
+      const response = await fetch('http://localhost:8000/fusion/generate-image', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -267,7 +268,7 @@ const ImageFusion = ({ projectId }) => {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate image with new viewpoint');
+        throw new Error(errorData.detail || 'Failed to generate image');
       }
 
       // Step 3: Processing response
@@ -276,18 +277,26 @@ const ImageFusion = ({ projectId }) => {
 
       const data = await response.json();
       
-      // Add to generated images array with timestamp
-      const newImage = {
-        id: Date.now(),
-        image: data.image,
-        prompt: finalPrompt,
-        timestamp: new Date().toLocaleString()
-      };
-      
-      setGeneratedImages(prev => [newImage, ...prev]);
-      setCurrentGeneratedImage(newImage);
+      if (data.success && data.image_data) {
+        // Add to generated images array with timestamp
+        const newImage = {
+          id: Date.now(),
+          image: data.image_data,
+          prompt: finalPrompt,
+          timestamp: new Date().toLocaleString()
+        };
+        
+        setGeneratedImages(prev => [newImage, ...prev]);
+        setCurrentGeneratedImage(newImage);
 
-      // Step 4: Complete
+        // Step 4: Complete
+        setProgressStep(4);
+        setGenerationProgress('Generation complete!');
+        
+        console.log('Image generated successfully using final prompt');
+      } else {
+        throw new Error(data.message || 'Failed to generate image');
+      }
       setProgressStep(4);
       setGenerationProgress('Generation complete!');
 

@@ -35,7 +35,7 @@ def get_db_connection():
               # Set pragmas for better concurrency
             _connection_pool.execute("PRAGMA busy_timeout = 60000")  # 60 second timeout
             _connection_pool.execute("PRAGMA journal_mode = DELETE")  # Use DELETE journal mode
-            _connection_pool.execute("PRAGMA synchronous = NORMAL")
+            __connection_pool.execute("PRAGMA synchronous = NORMAL")
             _connection_pool.execute("PRAGMA foreign_keys = ON")
             _connection_pool.execute("PRAGMA temp_store = MEMORY")
             _connection_pool.execute("PRAGMA mmap_size = 30000000000")
@@ -1005,9 +1005,34 @@ def save_enhanced_shots_to_project(user_id, project_id, session_data, shots_data
         # Generate a unique session ID
         session_id = str(uuid.uuid4())
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Create session name with timestamp
+          # Create session name with timestamp
         session_name = f"session_{timestamp}_{session_id[:8]}"
+        
+        # Create file system folders for the project session
+        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
+        session_dir = os.path.join(project_dir, session_name)
+        images_dir = os.path.join(session_dir, "images")
+        
+        # Create directories
+        os.makedirs(images_dir, exist_ok=True)
+        
+        # Save session input data to file
+        input_file_path = os.path.join(session_dir, "input.json")
+        with open(input_file_path, 'w') as f:
+            json.dump(session_data, f, indent=2)
+        
+        # Save shots data to file
+        shots_file_path = os.path.join(session_dir, "shots.json")
+        shots_for_file = {
+            "shots": shots_data if isinstance(shots_data, list) else shots_data.get('shots', []),
+            "session_id": session_id,
+            "created_at": datetime.now().isoformat(),
+            "num_shots": len(shots_data if isinstance(shots_data, list) else shots_data.get('shots', [])),
+            "scene_description": session_data.get('scene_description', ''),
+            "model_name": session_data.get('model_name', 'unknown')
+        }
+        with open(shots_file_path, 'w') as f:
+            json.dump(shots_for_file, f, indent=2)
         
         # Prepare session data
         session_record = {
@@ -1035,26 +1060,42 @@ def save_enhanced_shots_to_project(user_id, project_id, session_data, shots_data
                     (session_id, user_id, session_name, json.dumps(session_record), 
                      datetime.now().isoformat(), project_id)
                 )
-                
-                # Also save individual shots to the shots table if they don't exist
-                for i, shot in enumerate(shots_data.get('shots', []), 1):
+                  # Also save individual shots to the shots table if they don't exist
+                # shots_data can be either a list of shots or a dict with 'shots' key
+                shots_list = shots_data if isinstance(shots_data, list) else shots_data.get('shots', [])
+                for i, shot in enumerate(shots_list, 1):
                     shot_id = save_shot(
                         project_id=project_id,
                         shot_number=i,
-                        scene_description=shot.get('scene_description', ''),
+                        scene_description=session_data.get('scene_description', ''),
                         shot_description=shot.get('shot_description', ''),
-                        model_name=shots_data.get('model', 'unknown'),
+                        model_name=session_data.get('model_name', 'unknown'),
                         metadata={
                             "session_id": session_id,
                             "enhanced": True,
-                            "original_input": session_data
-                        },
-                        user_input=session_data.get('subject', '')
+                            "original_input": session_data,
+                            "shot_metadata": shot.get('metadata', {})
+                        },                        user_input=session_data.get('scene_description', '')
                     )
                 
                 conn.commit()
                 print(f"Database: Enhanced session saved successfully: {session_id}")
-                return session_record
+                  # Create proper return structure with all required fields
+                return {
+                    "session_id": session_id,
+                    "session_dir": session_dir,
+                    "images_dir": images_dir,
+                    "type": "enhanced_project_session",
+                    "id": session_id,
+                    "name": session_name,
+                    "user_id": user_id,
+                    "project_id": project_id,
+                    "input_data": session_data,
+                    "shots_data": shots_data,
+                    "created_at": datetime.now().isoformat(),
+                    "input_file": input_file_path,
+                    "shots_file": shots_file_path
+                }
                 
             except sqlite3.Error as e:
                 print(f"Database: Error saving enhanced session: {str(e)}")
@@ -1069,63 +1110,148 @@ def save_enhanced_shots_to_project(user_id, project_id, session_data, shots_data
         print(f"Error in save_enhanced_shots_to_project: {str(e)}")
         return None
 
-def save_shot_image_to_project(user_id, project_id, session_id, shot_index, image_data, shot_data):
+def save_fusion_session_to_project(user_id, project_id, final_prompt, generated_image):
     """
-    Save shot image to project structure
+    Save Image Fusion session data to project structure
     """
     try:
+        import uuid
+        import json
         import base64
+        from datetime import datetime
         
-        # Create project images directory structure
+        # Generate a unique session ID
+        session_id = str(uuid.uuid4())
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create session name with timestamp
+        session_name = f"fusion_session_{timestamp}_{session_id[:8]}"
+        
+        # Create file system folders for the project session
         project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
-        os.makedirs(project_dir, exist_ok=True)
+        session_dir = os.path.join(project_dir, session_name)
+        images_dir = os.path.join(session_dir, "images")
         
-        # Generate filename
-        filename = f"shot_{shot_index}.png"
-        file_path = os.path.join(project_dir, filename)
+        # Create directories
+        os.makedirs(images_dir, exist_ok=True)
         
-        # Save image data
-        if image_data:
-            # If image_data is base64, decode and save
-            if isinstance(image_data, str) and image_data.startswith('data:image'):
-                # Remove data:image/png;base64, prefix
-                base64_data = image_data.split(',')[1]
-                image_bytes = base64.b64decode(base64_data)
-                with open(file_path, 'wb') as f:
-                    f.write(image_bytes)
-            elif isinstance(image_data, bytes):
-                # Direct bytes data
-                with open(file_path, 'wb') as f:
-                    f.write(image_data)
-            else:
-                print(f"Warning: Unsupported image data type: {type(image_data)}")
+        # Save session input data to file
+        input_data = {
+            "type": "image_fusion",
+            "final_prompt": final_prompt,
+            "created_at": datetime.now().isoformat(),
+            "session_id": session_id,
+            "user_id": user_id,
+            "project_id": project_id
+        }
+        
+        input_file_path = os.path.join(session_dir, "input.json")
+        with open(input_file_path, 'w') as f:
+            json.dump(input_data, f, indent=2)
+        
+        # Save generated image to file
+        image_filename = f"fusion_image_{timestamp}.png"
+        image_file_path = os.path.join(images_dir, image_filename)
+        
+        # Decode base64 image and save to file
+        try:
+            image_bytes = base64.b64decode(generated_image)
+            with open(image_file_path, 'wb') as f:
+                f.write(image_bytes)
+            print(f"Fusion image saved to: {image_file_path}")
+        except Exception as img_error:
+            print(f"Error saving fusion image: {img_error}")
+            image_file_path = None
+        
+        # Save output data to file
+        output_data = {
+            "type": "image_fusion",
+            "generated_image_path": image_file_path,
+            "generated_image_filename": image_filename,
+            "final_prompt": final_prompt,
+            "generation_completed_at": datetime.now().isoformat(),
+            "session_id": session_id
+        }
+        
+        output_file_path = os.path.join(session_dir, "output.json")
+        with open(output_file_path, 'w') as f:
+            json.dump(output_data, f, indent=2)
+        
+        # Save to database sessions table
+        session_record = {
+            "id": session_id,
+            "name": session_name,
+            "user_id": user_id,
+            "project_id": project_id,
+            "type": "image_fusion",
+            "input_data": input_data,
+            "output_data": output_data,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        conn = get_db_connection()
+        if conn:
+            try:
+                # Insert session record
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO sessions (id, user_id, name, data, created_at, project_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (session_id, user_id, session_name, json.dumps(session_record), 
+                     datetime.now().isoformat(), project_id)
+                )
+                
+                conn.commit()
+                print(f"Database: Fusion session saved successfully: {session_id}")
+                
+            except sqlite3.Error as e:
+                print(f"Database: Error saving fusion session: {str(e)}")
+                conn.rollback()
                 return None
-            
-            # Create metadata file
-            metadata_path = os.path.join(project_dir, f"shot_{shot_index}_metadata.json")
-            metadata = {
-                "user_id": user_id,
-                "project_id": project_id,
-                "session_id": session_id,
-                "shot_index": shot_index,
-                "filename": filename,
-                "file_path": file_path,
-                "shot_data": shot_data,
-                "created_at": datetime.now().isoformat()
-            }
-            
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata, f, indent=2)
-            
-            print(f"Database: Shot image saved to project: {file_path}")
-            return {
-                "file_path": file_path,
-                "filename": filename,
-                "metadata": metadata
-            }
+            finally:
+                close_db_connection()
         
-        return None
+        # Return success data
+        return {
+            "session_id": session_id,
+            "session_dir": session_dir,
+            "images_dir": images_dir,
+            "type": "image_fusion_session",
+            "input_file": input_file_path,
+            "output_file": output_file_path,
+            "image_file": image_file_path
+        }
         
     except Exception as e:
-        print(f"Error saving shot image to project: {str(e)}")
+        print(f"Error in save_fusion_session_to_project: {str(e)}")
         return None
+
+def get_session_by_id(session_id):
+    """Get session data by session ID"""
+    try:
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor()
+            session = cursor.execute(
+                "SELECT * FROM sessions WHERE id = ?",
+                (session_id,)
+            ).fetchone()
+            
+            if session:
+                # Convert to dict
+                session_dict = dict(session)
+                # Parse JSON data if it exists
+                if session_dict.get('data'):
+                    try:
+                        session_dict['data'] = json.loads(session_dict['data'])
+                    except:
+                        pass
+                return session_dict
+            return None
+    except Exception as e:
+        print(f"Error getting session by ID: {e}")
+        return None
+    finally:
+        close_db_connection()

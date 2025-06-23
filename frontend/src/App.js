@@ -40,45 +40,7 @@ const ProtectedRoute = ({ children }) => {
   return children;
 };
 
-const HomePage = () => (
-  <Container maxWidth="md">
-    <Box sx={{ mt: 8, textAlign: 'center' }}>
-      <Typography variant="h2" component="h1" gutterBottom>
-        SHOT-SUGGESTOR
-      </Typography>
-      <Typography variant="h6" color="text.secondary" gutterBottom>
-        Professional AI-powered photography assistant for intelligent shot suggestions and creative image fusion
-      </Typography>
-      <Box sx={{ mt: 4, display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
-        <Button 
-          component={Link} 
-          to="/login" 
-          variant="contained" 
-          size="large"
-        >
-          Login
-        </Button>
-        <Button 
-          component={Link} 
-          to="/register" 
-          variant="outlined" 
-          size="large"
-        >
-          Register
-        </Button>
-        <Button 
-          component={Link} 
-          to="/dashboard" 
-          variant="contained" 
-          size="large"
-          color="secondary"
-        >
-          Dashboard
-        </Button>
-      </Box>
-    </Box>
-  </Container>
-);
+
 
 function App() {
   return (
@@ -87,7 +49,7 @@ function App() {
       <AuthProvider>
         <BrowserRouter>
           <SimpleNavbar />          <Routes>
-            <Route path="/" element={<HomePage />} />
+            <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login-simple" element={<SimpleLogin />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} /><Route 

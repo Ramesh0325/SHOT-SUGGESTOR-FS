@@ -212,8 +212,34 @@ const ShotSuggestorWithTabs = () => {
 
   const handleShotClick = (shot) => {
     setSelectedShot(shot);
-    setOpen(true);
-  };
+    setOpen(true);  };
+  const renderProjectHeader = () => (
+    selectedProject && (
+      <Paper sx={{ p: 2, mb: 3, background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <IconButton onClick={handleBackToProjects} sx={{ color: 'primary.main' }}>
+              <ArrowBack />
+            </IconButton>
+            <Box>
+              <Typography variant="h5" fontWeight="bold" color="primary.main">
+                {selectedProject.name}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {selectedProject.description || 'No description'}
+              </Typography>
+            </Box>
+          </Box>
+          <Chip 
+            label="Shot Suggestion Project" 
+            color="primary" 
+            icon={<CameraAlt />}
+            variant="outlined"
+          />
+        </Box>
+      </Paper>
+    )
+  );
 
   const renderTabContent = () => {
     switch (currentTab) {
@@ -226,41 +252,21 @@ const ShotSuggestorWithTabs = () => {
         );
       case 1:
         return renderShotGenerator();
-      case 2:
-        return <Sessions projectType="shot-suggestion" />;
+      case 2:        return (
+          <Container maxWidth="xl" sx={{ py: 3, minHeight: '100vh' }}>
+            {renderProjectHeader()}
+            <Sessions 
+              projectType="shot-suggestion" 
+              projectId={selectedProject?.id}
+            />
+          </Container>
+        );
       default:
         return null;
     }
-  };
-
-  const renderShotGenerator = () => (
-    <Box sx={{ minHeight: '80vh' }}>
-      {/* Project Header */}
-      {selectedProject && (
-        <Paper sx={{ p: 2, mb: 3, background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <IconButton onClick={handleBackToProjects} sx={{ color: 'primary.main' }}>
-                <ArrowBack />
-              </IconButton>
-              <Box>
-                <Typography variant="h5" fontWeight="bold" color="primary.main">
-                  {selectedProject.name}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {selectedProject.description || 'No description'}
-                </Typography>
-              </Box>
-            </Box>
-            <Chip 
-              label="Shot Suggestion Project" 
-              color="primary" 
-              icon={<CameraAlt />}
-              variant="outlined"
-            />
-          </Box>
-        </Paper>
-      )}
+  };  const renderShotGenerator = () => (
+    <Container maxWidth="xl" sx={{ py: 3, minHeight: '100vh' }}>
+      {renderProjectHeader()}
 
       <Grid container spacing={3}>
         {/* Left Panel - Shot Configuration */}
@@ -416,64 +422,68 @@ const ShotSuggestorWithTabs = () => {
                   </Grid>
                 ))}
               </Grid>
-            )}
-          </Paper>
+            )}          </Paper>
         </Grid>
       </Grid>
-    </Box>
+    </Container>
   );
-
   return (
     <Box sx={{ 
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
-      pt: 8
+      pt: selectedProject ? 0 : 8  // No top padding when in project view
     }}>
-      <Container maxWidth="xl" sx={{ py: 3 }}>
-        {/* Header */}
-        <Paper sx={{ mb: 3, overflow: 'hidden' }}>
-          <Box sx={{ 
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            color: 'white',
-            p: 3
-          }}>
-            <Typography variant="h4" fontWeight="bold" gutterBottom>
-              Shot Suggestion Studio
-            </Typography>
-            <Typography variant="subtitle1" sx={{ opacity: 0.9 }}>
-              Create professional shot suggestions with AI-powered scene analysis
-            </Typography>
-          </Box>
-          
-          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-            <Tabs value={currentTab} onChange={handleTabChange} aria-label="shot suggestor tabs">
-              <Tab 
-                icon={<FolderOpen />} 
-                label="Projects" 
-                iconPosition="start"
-                sx={{ textTransform: 'none', fontWeight: 'bold' }}
-              />
-              <Tab 
-                icon={<CameraAlt />} 
-                label="Shot Generator" 
-                iconPosition="start"
-                sx={{ textTransform: 'none', fontWeight: 'bold' }}
-                disabled={!selectedProject}
-              />
-              <Tab 
-                icon={<History />} 
-                label="Sessions" 
-                iconPosition="start"
-                sx={{ textTransform: 'none', fontWeight: 'bold' }}
-              />
-            </Tabs>
-          </Box>
-        </Paper>
+      {!selectedProject ? (
+        // Show tabs header only when no project is selected
+        <Container maxWidth="xl" sx={{ py: 3 }}>
+          <Paper sx={{ mb: 3, overflow: 'hidden' }}>
+            <Box sx={{ 
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              color: 'white',
+              p: 3
+            }}>
+              <Typography variant="h4" fontWeight="bold" gutterBottom>
+                Shot Suggestion Studio
+              </Typography>
+              <Typography variant="subtitle1" sx={{ opacity: 0.9 }}>
+                Create professional shot suggestions with AI-powered scene analysis
+              </Typography>
+            </Box>
+            
+            <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+              <Tabs value={currentTab} onChange={handleTabChange} aria-label="shot suggestor tabs">
+                <Tab 
+                  icon={<FolderOpen />} 
+                  label="Projects" 
+                  iconPosition="start"
+                  sx={{ textTransform: 'none', fontWeight: 'bold' }}
+                />
+                <Tab 
+                  icon={<CameraAlt />} 
+                  label="Shot Generator" 
+                  iconPosition="start"
+                  sx={{ textTransform: 'none', fontWeight: 'bold' }}
+                  disabled={!selectedProject}
+                />
+                <Tab 
+                  icon={<History />} 
+                  label="Sessions" 
+                  iconPosition="start"
+                  sx={{ textTransform: 'none', fontWeight: 'bold' }}
+                />
+              </Tabs>
+            </Box>
+          </Paper>
 
-        {/* Tab Content */}
-        {renderTabContent()}
-
-        {/* Shot Detail Modal */}
+          {/* Tab Content */}
+          {renderTabContent()}
+        </Container>
+      ) : (
+        // Full-screen project view
+        <Box sx={{ minHeight: '100vh', pt: 8 }}>
+          {renderTabContent()}
+        </Box>
+      )}        {/* Shot Detail Modal */}
         <Dialog 
           open={open} 
           onClose={() => setOpen(false)}
@@ -521,7 +531,6 @@ const ShotSuggestorWithTabs = () => {
             {snackbarMessage}
           </Alert>
         </Snackbar>
-      </Container>
     </Box>
   );
 };

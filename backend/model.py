@@ -1656,7 +1656,7 @@ def merge_image_descriptions_with_prompt(image_descriptions: List[str], user_pro
         
         # Use Gemini to intelligently extract and synthesize key visual elements
         synthesis_prompt = f"""
-Analyze these image descriptions and create a concise prompt for AI image generation:
+Analyze these image descriptions and create an optimized prompt for AI image generation that preserves key visual identity:
 
 IMAGE DESCRIPTIONS:
 {full_descriptions}
@@ -1664,14 +1664,20 @@ IMAGE DESCRIPTIONS:
 USER'S NEW REQUIREMENT:
 {user_prompt}
 
-Create an optimized prompt for image generation (60-80 words maximum) that:
+Create a focused prompt for image generation (75-100 words maximum) that:
 1. Starts with the user's angle requirement
-2. Includes only the most essential visual elements: main subject, setting, lighting, key colors
-3. Uses clear, direct language (no flowery descriptions)
-4. Focuses on elements critical for visual consistency
-5. Avoids redundancy and unnecessary details
+2. PRIORITIZES MOST IMPORTANT ELEMENTS: Focus on the 3-4 most distinctive visual features
+3. PRESERVES CORE IDENTITY: Include only the most essential clothing/armor details, key props, distinctive features
+4. PRESERVES KEY ATMOSPHERE: Include only the most impactful environmental elements (weather, lighting mood, setting type)
+5. MAINTAINS VISUAL CONSISTENCY: Use specific but concise descriptors for colors, materials, style
 
-Format: Single paragraph, maximum 80 words, direct and clear language for optimal image generation quality.
+CRITICAL OPTIMIZATION RULES:
+- Keep under 75-100 words total for optimal model focus
+- Prioritize quality over quantity - choose only the MOST distinctive elements
+- Use precise, impactful adjectives rather than long descriptions
+- Environmental details should be concise but atmospheric (e.g., "stormy battlefield" not "stormy dramatic sky with heavy clouds over rocky mountainous battlefield terrain")
+
+Format: Single focused paragraph, 75-100 words maximum, optimized for image generation model performance.
 """
 
         try:
@@ -1683,62 +1689,80 @@ Format: Single paragraph, maximum 80 words, direct and clear language for optima
             synthesized_prompt = re.sub(r'^.*?:', '', synthesized_prompt)  # Remove any leading labels
             synthesized_prompt = synthesized_prompt.replace('\n', ' ').strip()
             
-            # Ensure optimal length for image generation (max 400 characters)
+            # Ensure optimal length for image generation (max 400 characters for focused model performance)
             if len(synthesized_prompt) > 400:
                 # Truncate at last complete phrase before 400 chars
                 truncated = synthesized_prompt[:400]
                 last_comma = truncated.rfind(', ')
-                if last_comma > 200:  # Ensure we don't truncate too much
-                    synthesized_prompt = truncated[:last_comma]
+                last_period = truncated.rfind('. ')
+                last_punct = max(last_comma, last_period)
+                if last_punct > 200:  # Ensure we don't truncate too much
+                    synthesized_prompt = truncated[:last_punct]
                 else:
                     synthesized_prompt = truncated.rstrip(', .')
             
-            logger.info(f"AI-synthesized prompt ({len(synthesized_prompt)} chars): {synthesized_prompt[:100]}...")
+            logger.info(f"AI-synthesized optimized prompt ({len(synthesized_prompt)} chars): {synthesized_prompt}")
             return synthesized_prompt
             
         except Exception as gemini_error:
             logger.warning(f"Gemini synthesis failed: {gemini_error}, using fallback method")
             
-            # Fallback: Extract key elements manually
+            # Fallback: Extract key elements manually with focused optimization
             combined_text = full_descriptions.lower()
             
-            # Extract key visual elements
+            # Extract key visual elements with priority focus
             key_elements = []
             
-            # Lighting
-            if "bright" in combined_text or "sunlight" in combined_text:
-                key_elements.append("bright natural lighting")
-            elif "soft" in combined_text and "light" in combined_text:
-                key_elements.append("soft lighting")
-            elif "dramatic" in combined_text:
-                key_elements.append("dramatic lighting")
+            # Environmental atmosphere (TOP PRIORITY - but concise)
+            if any(word in combined_text for word in ['storm', 'cloud', 'overcast', 'dramatic sky']):
+                key_elements.append('stormy sky')
+            if any(word in combined_text for word in ['rocky', 'mountain', 'terrain', 'battlefield']):
+                key_elements.append('rocky terrain')
+            if any(word in combined_text for word in ['dark', 'moody', 'dramatic', 'harsh']):
+                key_elements.append('dramatic lighting')
             
-            # Colors
-            color_match = re.search(r'(red|blue|green|yellow|orange|purple|black|white|silver|gold|brown)[^.]{0,20}', combined_text)
-            if color_match:
-                key_elements.append(f"{color_match.group(0)}")
+            # Core character elements (ESSENTIAL ONLY)
+            armor_found = False
+            for keyword in ["armor", "helmet", "shield", "breastplate"]:
+                if keyword in combined_text and not armor_found:
+                    key_elements.append('detailed armor')
+                    armor_found = True
+                    break
             
-            # Setting
-            if "outdoor" in combined_text:
-                key_elements.append("outdoor setting")
-            elif "indoor" in combined_text:
-                key_elements.append("indoor setting")
+            # Weapons (SINGLE MOST PROMINENT)
+            weapon_found = False
+            for keyword in ["sword", "spear", "bow", "weapon"]:
+                if keyword in combined_text and not weapon_found:
+                    key_elements.append(f'{keyword}')
+                    weapon_found = True
+                    break
             
-            # Objects/subjects
-            subjects = []
-            if "car" in combined_text:
-                subjects.append("car")
-            if "building" in combined_text:
-                subjects.append("building")
-            if "person" in combined_text or "people" in combined_text:
-                subjects.append("person")
+            # Key colors (MOST DISTINCTIVE ONLY)
+            color_keywords = ['bronze', 'silver', 'gold', 'copper', 'metallic', 'brown', 'gray']
+            for color in color_keywords:
+                if color in combined_text:
+                    key_elements.append(f'{color} tones')
+                    break  # Only include one primary color scheme
             
-            # Build fallback prompt
-            preserved_elements = ", ".join(key_elements[:4])  # Limit to key elements
-            subject_list = ", ".join(subjects[:2]) if subjects else "main subject"
+            # Character types (MAIN SUBJECT ONLY)
+            subject = "warrior"
+            for keyword in ["knight", "soldier", "fighter", "hero"]:
+                if keyword in combined_text:
+                    subject = keyword
+                    break
             
-            fallback_prompt = f"{user_prompt}, {subject_list}, {preserved_elements}, professional photography, consistent visual style"
+            # Build focused, optimized prompt
+            preserved_elements = ", ".join(key_elements[:5])  # Limit to 5 most important elements
             
+            fallback_prompt = f"{user_prompt}. {subject} with {preserved_elements}. Cinematic composition, epic scale, gritty realism."
+            
+            # Ensure fallback is also within optimal length
+            if len(fallback_prompt) > 400:
+                # Simplify further
+                essential_elements = ", ".join(key_elements[:3])
+                fallback_prompt = f"{user_prompt}. {subject} with {essential_elements}. Cinematic, epic scale."
+            
+            logger.info(f"Fallback optimized prompt ({len(fallback_prompt)} chars): {fallback_prompt}")
             return fallback_prompt
         
     except Exception as e:
@@ -1751,45 +1775,128 @@ Format: Single paragraph, maximum 80 words, direct and clear language for optima
 
 def generate_enhanced_negative_prompt(image_descriptions: List[str], base_negative: str) -> str:
     """
-    Generate an enhanced negative prompt based on what should NOT be changed from the reference images
+    Generate an optimized negative prompt that's focused and effective
     """
     try:
         # Analyze descriptions to understand what elements must be preserved
         combined = " ".join(image_descriptions).lower()
         
-        enhanced_negatives = [base_negative]
+        # Start with essential negatives
+        enhanced_negatives = [
+            "blurry, low quality, distorted, deformed",
+            "multiple images, inconsistent style",
+            "completely different scene, different setting"
+        ]
         
-        # Add specific negatives based on image content
+        # Add specific negatives based on image content (focused)
         if "outdoor" in combined:
-            enhanced_negatives.append("indoor setting, interior space")
+            enhanced_negatives.append("indoor setting")
         elif "indoor" in combined:
-            enhanced_negatives.append("outdoor setting, exterior space")
+            enhanced_negatives.append("outdoor setting")
         
-        if "bright" in combined or "sunny" in combined:
-            enhanced_negatives.append("dark, gloomy, night time, dim lighting")
-        elif "dark" in combined or "night" in combined:
-            enhanced_negatives.append("bright daylight, sunny, overexposed")
+        if "armor" in combined or "warrior" in combined:
+            enhanced_negatives.append("modern clothing, casual wear")
         
-        if "car" in combined or "vehicle" in combined:
-            enhanced_negatives.append("different car model, different vehicle type, different color car")
+        if "stormy" in combined or "dramatic" in combined:
+            enhanced_negatives.append("bright sunny day, cheerful lighting")
         
-        if "building" in combined or "architecture" in combined:
-            enhanced_negatives.append("different building, different architecture style")
+        # Keep negative prompt concise but effective
+        result = ", ".join(enhanced_negatives)
         
-        # General preservation negatives
-        enhanced_negatives.extend([
-            "completely different scene",
-            "different setting",
-            "different location", 
-            "different background",
-            "different lighting style",
-            "different color scheme",
-            "different visual style",
-            "inconsistent theme"
-        ])
+        # Limit length to avoid overwhelming the model
+        if len(result) > 200:
+            result = ", ".join(enhanced_negatives[:4])
         
-        return ", ".join(enhanced_negatives)
+        return result
         
     except Exception as e:
         logger.error(f"Error generating enhanced negative prompt: {str(e)}")
-        return base_negative
+        return "blurry, low quality, distorted, deformed, inconsistent style"
+
+def generate_image_from_text_prompt(
+    prompt: str,
+    model_name: str = "runwayml/stable-diffusion-v1-5",
+    negative_prompt: str = "blurry, low quality, distorted, deformed, inconsistent style",
+    num_inference_steps: int = 30,  # Reduced for better speed/quality balance
+    guidance_scale: float = 8.0,    # Slightly higher for better prompt following
+    width: int = 512,
+    height: int = 512
+) -> str:
+    """
+    Generate image from text prompt only (text-to-image).
+    This is used when we already have a comprehensive final prompt.
+    
+    Args:
+        prompt: Complete text prompt for image generation
+        model_name: The diffusion model to use
+        negative_prompt: What to avoid in the generation
+        num_inference_steps: Number of denoising steps
+        guidance_scale: How closely to follow the prompt
+        width: Output image width
+        height: Output image height
+    
+    Returns:
+        Base64 encoded image string
+    """
+    try:
+        logger.info(f"Starting text-to-image generation with prompt: {prompt[:100]}...")
+        
+        # Check for GPU availability
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Using device: {device}")
+        
+        # Import required modules
+        from diffusers import StableDiffusionPipeline
+        
+        # Initialize the text-to-image pipeline
+        if device == "cuda":
+            pipe = StableDiffusionPipeline.from_pretrained(
+                model_name,
+                torch_dtype=torch.float16,
+                use_safetensors=True
+            ).to(device)
+        else:
+            pipe = StableDiffusionPipeline.from_pretrained(
+                model_name,
+                torch_dtype=torch.float32
+            ).to(device)
+        
+        # Enable memory efficient attention
+        if hasattr(pipe, 'enable_attention_slicing'):
+            pipe.enable_attention_slicing()
+        
+        logger.info("Pipeline loaded successfully")
+        
+        # Generate the image
+        logger.info("Generating image...")
+        with torch.no_grad():
+            result = pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                width=width,
+                height=height,
+                generator=torch.Generator(device=device).manual_seed(42)  # For reproducibility
+            )
+        
+        generated_image = result.images[0]
+        logger.info("Image generation completed")
+        
+        # Convert to base64
+        buffered = BytesIO()
+        generated_image.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        
+        logger.info("Image conversion to base64 completed")
+        return img_str  # Return just the base64 string, not the full data URL
+        
+    except Exception as e:
+        logger.error(f"Error in text-to-image generation: {str(e)}")
+        raise e
+    finally:
+        # Clean up GPU memory
+        if 'pipe' in locals():
+            del pipe
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
