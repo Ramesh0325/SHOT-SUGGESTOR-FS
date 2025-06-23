@@ -6,12 +6,11 @@ import { Typography, Container, Box, Button } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import productionTheme from './theme/productionTheme';
 
-// Import components - ALL COMPONENTS RESTORED (Dashboard FIXED!)
-import TestComponent from './components/TestComponent';
+// Import components - PRODUCTION READY
 import SimpleLogin from './components/SimpleLogin';
 import Login from './components/auth/Login';
 import Register from './components/auth/Register';
-import FixedDashboard from './components/FixedDashboard'; // WORKING PERFECTLY!
+import FixedDashboard from './components/FixedDashboard';
 import Projects from './components/projects/Projects';
 import ProjectDetail from './components/projects/ProjectDetail';
 import Sessions from './components/sessions/Sessions';
@@ -43,25 +42,23 @@ const ProtectedRoute = ({ children }) => {
 
 const HomePage = () => (
   <Container maxWidth="md">
-    <Box sx={{ mt: 8, textAlign: 'center' }}> {/* Added mt: 8 to account for navbar */}
+    <Box sx={{ mt: 8, textAlign: 'center' }}>
       <Typography variant="h2" component="h1" gutterBottom>
         SHOT-SUGGESTOR
       </Typography>
       <Typography variant="h6" color="text.secondary" gutterBottom>
-        Professional AI-powered photography assistant
+        Professional AI-powered photography assistant for intelligent shot suggestions and creative image fusion
       </Typography>
-      <Box sx={{ mt: 3, mb: 3 }}>        <Typography variant="h6" color="text.secondary">
-          🎉 PRODUCTION READY! All components restored with working Dashboard!
-        </Typography>
-      </Box>
-      <Box sx={{ mt: 3, display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>        <Button 
+      <Box sx={{ mt: 4, display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+        <Button 
           component={Link} 
           to="/login" 
           variant="contained" 
           size="large"
         >
-          Login (Original)
-        </Button>        <Button 
+          Login
+        </Button>
+        <Button 
           component={Link} 
           to="/register" 
           variant="outlined" 
@@ -74,17 +71,9 @@ const HomePage = () => (
           to="/dashboard" 
           variant="contained" 
           size="large"
-          color="primary"
+          color="secondary"
         >
           Dashboard
-        </Button>
-        <Button 
-          component={Link} 
-          to="/test" 
-          variant="outlined" 
-          size="large"
-        >
-          Test Component
         </Button>
       </Box>
     </Box>
@@ -97,13 +86,11 @@ function App() {
       <CssBaseline />
       <AuthProvider>
         <BrowserRouter>
-          <SimpleNavbar />
-          <Routes>
+          <SimpleNavbar />          <Routes>
             <Route path="/" element={<HomePage />} />
-            <Route path="/test" element={<TestComponent />} />
             <Route path="/login-simple" element={<SimpleLogin />} />
             <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />            <Route 
+            <Route path="/register" element={<Register />} /><Route 
               path="/dashboard" 
               element={
                 <ProtectedRoute>
@@ -131,9 +118,7 @@ function App() {
                 <ProtectedRoute>
                   <ShotOutputPage />
                 </ProtectedRoute>
-              } 
-            />
-            {/* All routes now active and production ready! */}
+              }            />
           </Routes>
         </BrowserRouter>
       </AuthProvider>
