@@ -20,7 +20,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import Projects from '../projects/Projects';
-import Sessions from '../sessions/Sessions';
+import Sessions from '../sessions/SessionsSimple';
 import ImageFusion from './ImageFusion';
 
 const ImageFusionWithTabs = () => {

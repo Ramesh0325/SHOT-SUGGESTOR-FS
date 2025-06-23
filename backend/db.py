@@ -31,11 +31,10 @@ def get_db_connection():
         if _connection_pool is None:
             # Initialize the connection pool
             _connection_pool = sqlite3.connect(DB_FILE, timeout=60.0)
-            _connection_pool.row_factory = sqlite3.Row
-              # Set pragmas for better concurrency
+            _connection_pool.row_factory = sqlite3.Row            # Set pragmas for better concurrency
             _connection_pool.execute("PRAGMA busy_timeout = 60000")  # 60 second timeout
             _connection_pool.execute("PRAGMA journal_mode = DELETE")  # Use DELETE journal mode
-            __connection_pool.execute("PRAGMA synchronous = NORMAL")
+            _connection_pool.execute("PRAGMA synchronous = NORMAL")
             _connection_pool.execute("PRAGMA foreign_keys = ON")
             _connection_pool.execute("PRAGMA temp_store = MEMORY")
             _connection_pool.execute("PRAGMA mmap_size = 30000000000")
@@ -1045,10 +1044,8 @@ def save_enhanced_shots_to_project(user_id, project_id, session_data, shots_data
             "created_at": datetime.now().isoformat(),
             "type": "enhanced"
         }
-        
-        # Save to database sessions table
-        conn = get_db_connection()
-        if conn:
+          # Save to database sessions table
+        with get_db_connection() as conn:
             try:
                 # Insert session record
                 cursor = conn.cursor()
@@ -1060,7 +1057,8 @@ def save_enhanced_shots_to_project(user_id, project_id, session_data, shots_data
                     (session_id, user_id, session_name, json.dumps(session_record), 
                      datetime.now().isoformat(), project_id)
                 )
-                  # Also save individual shots to the shots table if they don't exist
+                
+                # Also save individual shots to the shots table if they don't exist
                 # shots_data can be either a list of shots or a dict with 'shots' key
                 shots_list = shots_data if isinstance(shots_data, list) else shots_data.get('shots', [])
                 for i, shot in enumerate(shots_list, 1):
@@ -1075,34 +1073,34 @@ def save_enhanced_shots_to_project(user_id, project_id, session_data, shots_data
                             "enhanced": True,
                             "original_input": session_data,
                             "shot_metadata": shot.get('metadata', {})
-                        },                        user_input=session_data.get('scene_description', '')
+                        },
+                        user_input=session_data.get('scene_description', '')
                     )
                 
                 conn.commit()
                 print(f"Database: Enhanced session saved successfully: {session_id}")
-                  # Create proper return structure with all required fields
-                return {
-                    "session_id": session_id,
-                    "session_dir": session_dir,
-                    "images_dir": images_dir,
-                    "type": "enhanced_project_session",
-                    "id": session_id,
-                    "name": session_name,
-                    "user_id": user_id,
-                    "project_id": project_id,
-                    "input_data": session_data,
-                    "shots_data": shots_data,
-                    "created_at": datetime.now().isoformat(),
-                    "input_file": input_file_path,
-                    "shots_file": shots_file_path
-                }
                 
             except sqlite3.Error as e:
                 print(f"Database: Error saving enhanced session: {str(e)}")
                 conn.rollback()
                 return None
-            finally:
-                close_db_connection()
+        
+        # Create proper return structure with all required fields
+        return {
+            "session_id": session_id,
+            "session_dir": session_dir,
+            "images_dir": images_dir,
+            "type": "enhanced_project_session",
+            "id": session_id,
+            "name": session_name,
+            "user_id": user_id,
+            "project_id": project_id,
+            "input_data": session_data,
+            "shots_data": shots_data,
+            "created_at": datetime.now().isoformat(),
+            "input_file": input_file_path,
+            "shots_file": shots_file_path
+        }
         
         return None
         
@@ -1175,9 +1173,7 @@ def save_fusion_session_to_project(user_id, project_id, final_prompt, generated_
         
         output_file_path = os.path.join(session_dir, "output.json")
         with open(output_file_path, 'w') as f:
-            json.dump(output_data, f, indent=2)
-        
-        # Save to database sessions table
+            json.dump(output_data, f, indent=2)        # Save to database sessions table
         session_record = {
             "id": session_id,
             "name": session_name,
@@ -1189,8 +1185,7 @@ def save_fusion_session_to_project(user_id, project_id, final_prompt, generated_
             "created_at": datetime.now().isoformat()
         }
         
-        conn = get_db_connection()
-        if conn:
+        with get_db_connection() as conn:
             try:
                 # Insert session record
                 cursor = conn.cursor()
@@ -1210,8 +1205,6 @@ def save_fusion_session_to_project(user_id, project_id, final_prompt, generated_
                 print(f"Database: Error saving fusion session: {str(e)}")
                 conn.rollback()
                 return None
-            finally:
-                close_db_connection()
         
         # Return success data
         return {
@@ -1231,8 +1224,7 @@ def save_fusion_session_to_project(user_id, project_id, final_prompt, generated_
 def get_session_by_id(session_id):
     """Get session data by session ID"""
     try:
-        conn = get_db_connection()
-        if conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             session = cursor.execute(
                 "SELECT * FROM sessions WHERE id = ?",
@@ -1253,5 +1245,3 @@ def get_session_by_id(session_id):
     except Exception as e:
         print(f"Error getting session by ID: {e}")
         return None
-    finally:
-        close_db_connection()

@@ -1656,28 +1656,25 @@ def merge_image_descriptions_with_prompt(image_descriptions: List[str], user_pro
         
         # Use Gemini to intelligently extract and synthesize key visual elements
         synthesis_prompt = f"""
-Analyze these image descriptions and create an optimized prompt for AI image generation that preserves key visual identity:
+You are creating an AI image generation prompt. Your task is to merge the user's specific request with key visual elements from reference images.
 
-IMAGE DESCRIPTIONS:
-{full_descriptions}
-
-USER'S NEW REQUIREMENT:
+USER'S SPECIFIC REQUEST (MUST be the main focus):
 {user_prompt}
 
-Create a focused prompt for image generation (75-100 words maximum) that:
-1. Starts with the user's angle requirement
-2. PRIORITIZES MOST IMPORTANT ELEMENTS: Focus on the 3-4 most distinctive visual features
-3. PRESERVES CORE IDENTITY: Include only the most essential clothing/armor details, key props, distinctive features
-4. PRESERVES KEY ATMOSPHERE: Include only the most impactful environmental elements (weather, lighting mood, setting type)
-5. MAINTAINS VISUAL CONSISTENCY: Use specific but concise descriptors for colors, materials, style
+REFERENCE IMAGE DESCRIPTIONS (for visual style only):
+{full_descriptions}
 
-CRITICAL OPTIMIZATION RULES:
-- Keep under 75-100 words total for optimal model focus
-- Prioritize quality over quantity - choose only the MOST distinctive elements
-- Use precise, impactful adjectives rather than long descriptions
-- Environmental details should be concise but atmospheric (e.g., "stormy battlefield" not "stormy dramatic sky with heavy clouds over rocky mountainous battlefield terrain")
+CRITICAL INSTRUCTIONS:
+1. START the prompt with the user's exact request/angle: "{user_prompt}"
+2. Then add only the 3-4 MOST distinctive visual elements from the reference images
+3. Keep the ENTIRE prompt under 75-100 words for optimal AI performance
+4. Focus on: character appearance, key props, lighting mood, and setting atmosphere
+5. Use concise, impactful descriptions
 
-Format: Single focused paragraph, 75-100 words maximum, optimized for image generation model performance.
+EXAMPLE FORMAT:
+"{user_prompt}. [Key character details]. [Essential props/clothing]. [Atmosphere/lighting]. [Setting type]. Cinematic quality."
+
+Create the optimized prompt now (75-100 words maximum):
 """
 
         try:
@@ -1751,27 +1748,36 @@ Format: Single focused paragraph, 75-100 words maximum, optimized for image gene
                     subject = keyword
                     break
             
-            # Build focused, optimized prompt
+            # Build focused, optimized prompt with user request as primary focus
             preserved_elements = ", ".join(key_elements[:5])  # Limit to 5 most important elements
             
-            fallback_prompt = f"{user_prompt}. {subject} with {preserved_elements}. Cinematic composition, epic scale, gritty realism."
+            # Ensure user's request is the absolute priority
+            if preserved_elements:
+                fallback_prompt = f"{user_prompt}. {subject} with {preserved_elements}. Cinematic composition, epic scale."
+            else:
+                fallback_prompt = f"{user_prompt}. {subject} character. Cinematic composition, epic scale."
             
             # Ensure fallback is also within optimal length
             if len(fallback_prompt) > 400:
-                # Simplify further
-                essential_elements = ", ".join(key_elements[:3])
-                fallback_prompt = f"{user_prompt}. {subject} with {essential_elements}. Cinematic, epic scale."
+                # Simplify further while keeping user request intact
+                essential_elements = ", ".join(key_elements[:2])
+                if essential_elements:
+                    fallback_prompt = f"{user_prompt}. {subject} with {essential_elements}. Cinematic style."
+                else:
+                    fallback_prompt = f"{user_prompt}. {subject} character. Cinematic style."
             
             logger.info(f"Fallback optimized prompt ({len(fallback_prompt)} chars): {fallback_prompt}")
             return fallback_prompt
         
     except Exception as e:
         logger.error(f"Error in intelligent prompt merging: {str(e)}")
-        return f"{user_prompt}, maintaining the same visual theme and style from the reference images"
+        # Always preserve user's request even in error cases
+        return f"{user_prompt}. Maintaining visual style from reference images. Cinematic quality."
         
     except Exception as e:
         logger.error(f"Error merging descriptions with prompt: {str(e)}")
-        return f"{user_prompt}, maintaining the same visual theme and style from the reference images"
+        # Always preserve user's request even in error cases
+        return f"{user_prompt}. Maintaining visual style from reference images. Cinematic quality."
 
 def generate_enhanced_negative_prompt(image_descriptions: List[str], base_negative: str) -> str:
     """
