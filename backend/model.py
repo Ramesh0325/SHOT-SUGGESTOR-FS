@@ -25,6 +25,7 @@ import hashlib
 import functools
 from datetime import datetime, timedelta
 import aiosqlite
+import colorsys
 try:
     import cv2
 except ImportError:
@@ -766,75 +767,94 @@ def generate_fusion_image(
             img = img.resize((512, 512), Image.Resampling.LANCZOS)
             processed_images.append(img)
         
-        # Create a blended reference image from all input images
-        # This ensures we capture elements from all reference images
+        # Create a better blended reference image that preserves more detail
         if len(processed_images) > 1:
-            # Blend multiple reference images using weighted averaging
-            blended_image = Image.new('RGB', (512, 512), (0, 0, 0))
-            total_weight = 0
+            # Use the first image as the primary base and selectively blend others
+            primary_reference = processed_images[0]
             
-            for i, img in enumerate(processed_images):
-                # Convert to numpy array for blending
-                img_array = np.array(img, dtype=np.float32)
-                # Weight decreases for subsequent images to prioritize the first
-                weight = 1.0 / (i + 1)
-                blended_image = np.array(blended_image, dtype=np.float32)
-                blended_image += img_array * weight
-                total_weight += weight
-            
-            # Normalize the blended image
-            blended_image = blended_image / total_weight
-            blended_image = np.clip(blended_image, 0, 255).astype(np.uint8)
-            primary_reference = Image.fromarray(blended_image)
+            # For multiple images, create a composite that preserves the primary theme
+            # but incorporates elements from other images
+            for i, img in enumerate(processed_images[1:], 1):
+                try:
+                    # Use a lower weight for additional images to avoid theme dilution
+                    weight = 0.3 / i  # Decreasing weight for each additional image
+                    
+                    # Convert to arrays for blending
+                    primary_array = np.array(primary_reference, dtype=np.float32)
+                    blend_array = np.array(img, dtype=np.float32)
+                    
+                    # Blend only if the images are similar in structure (edge-based similarity)
+                    primary_gray = np.array(primary_reference.convert('L'), dtype=np.uint8)
+                    blend_gray = np.array(img.convert('L'), dtype=np.uint8)
+                    
+                    primary_edges = cv2.Canny(primary_gray, 50, 150)
+                    blend_edges = cv2.Canny(blend_gray, 50, 150)
+                    
+                    # Calculate edge similarity - ensure both arrays are boolean or uint8
+                    primary_edges_bool = primary_edges > 0
+                    blend_edges_bool = blend_edges > 0
+                    
+                    # Calculate edge similarity using proper boolean operations
+                    intersection = np.sum(primary_edges_bool & blend_edges_bool)
+                    union = np.sum(primary_edges_bool | blend_edges_bool)
+                    edge_similarity = intersection / (union + 1e-6)
+                    
+                    # Only blend if images are structurally similar
+                    if edge_similarity > 0.1:
+                        blended_array = primary_array * (1 - weight) + blend_array * weight
+                        primary_reference = Image.fromarray(np.clip(blended_array, 0, 255).astype(np.uint8))
+                    
+                except Exception as blend_error:
+                    logger.warning(f"Failed to blend image {i+1}: {str(blend_error)}, skipping blend")
+                    continue
         else:
             primary_reference = processed_images[0]
         
-        # Analyze reference images to extract theme and props
+        # NEW APPROACH: Extract detailed text descriptions from all reference images
+        logger.info("Extracting detailed descriptions from reference images...")
+        image_descriptions = []
+        for i, img in enumerate(processed_images):
+            try:
+                description = extract_detailed_image_description(img)
+                image_descriptions.append(description)
+                logger.info(f"Extracted description for image {i+1}: {description[:100]}...")
+            except Exception as e:
+                logger.warning(f"Failed to extract description for image {i+1}: {str(e)}")
+                # Fallback to traditional analysis for this image
+                fallback_desc = _fallback_image_analysis(img)
+                image_descriptions.append(fallback_desc)
+        
+        # Merge extracted descriptions with user prompt
+        logger.info("Merging image descriptions with user prompt...")
+        enhanced_prompt = merge_image_descriptions_with_prompt(image_descriptions, prompt)
+        
+        # Generate enhanced negative prompt based on descriptions
+        enhanced_negative_prompt = generate_enhanced_negative_prompt(image_descriptions, negative_prompt)
+        
+        logger.info(f"Enhanced prompt: {enhanced_prompt[:200]}...")
+        logger.info(f"Enhanced negative: {enhanced_negative_prompt[:200]}...")
+        
+        # Also run traditional analysis as backup for parameter optimization
         analysis = analyze_reference_images(processed_images)
         
-        # Extract theme-preserving elements from the analysis
-        theme_elements = []
-        if analysis.get("dominant_elements"):
-            theme_elements.extend(analysis["dominant_elements"])
+        # The enhanced_prompt was already created by merge_image_descriptions_with_prompt above
+        # No need for additional prompt enhancement since the detailed descriptions already contain
+        # all the theme preservation information we need
         
-        # Enhanced prompt that preserves complete theme while allowing new angles
-        theme_preservation = "same theme, same props, same objects, same setting, same visual style, same color palette, same lighting style, same composition elements, identical scene, same location, same environment"
+        # Validate and optimize parameters based on prompt requirements
+        validation = validate_prompt_following(prompt, strength, guidance_scale)
         
-        # Analyze if the prompt requests elements not visible in references
-        prompt_lower = prompt.lower()
-        missing_elements = []
+        # Use validated parameters
+        optimal_strength = validation["adjusted_strength"]
+        optimal_guidance = validation["adjusted_guidance"]
+        optimal_steps = max(num_inference_steps, 60)  # Good quality steps
         
-        # Check for body parts that might not be visible
-        body_parts = ["feet", "hands", "head", "face", "legs", "arms", "torso", "back", "side"]
-        for part in body_parts:
-            if part in prompt_lower and "same" not in prompt_lower:
-                missing_elements.append(f"show {part}")
+        # Log any warnings or adjustments
+        for warning in validation["warnings"]:
+            logger.warning(f"Parameter adjustment: {warning}")
         
-        # Check for angles that might reveal new elements
-        angle_indicators = ["from below", "from above", "close-up", "behind", "side view", "low angle", "high angle"]
-        for angle in angle_indicators:
-            if angle in prompt_lower:
-                missing_elements.append(f"reveal new perspective")
-        
-        # Combine user prompt with theme preservation and missing elements
-        if missing_elements:
-            missing_elements_str = ", ".join(missing_elements)
-            enhanced_prompt = f"{prompt}, {theme_preservation}, {missing_elements_str}, cohesive composition, unified style, seamless integration of reference elements, professional photography, cinematic quality, same exact world"
-        else:
-            enhanced_prompt = f"{prompt}, {theme_preservation}, cohesive composition, unified style, seamless integration of reference elements, professional photography, cinematic quality, same exact world"
-        
-        # Enhanced negative prompt to avoid losing theme elements
-        enhanced_negative_prompt = f"{negative_prompt}, different props, different objects, different setting, different theme, different visual style, different color palette, different lighting, different composition, different scene, different location, different environment"
-        
-        # Optimize parameters for better reference image matching
-        # Lower strength preserves more of the reference image characteristics
-        optimal_strength = min(strength, 0.65)  # Reduced from 0.75 for better preservation
-        
-        # Higher guidance scale for better prompt following while preserving reference
-        optimal_guidance = max(guidance_scale, 10.0)  # Increased minimum guidance
-        
-        # More inference steps for better quality
-        optimal_steps = max(num_inference_steps, 60)
+        # Ensure strength is within reasonable bounds
+        optimal_strength = max(min(optimal_strength, 0.8), 0.45)  # Allow sufficient variation for prompt following
         
         # Generate the fused image with optimized parameters
         logger.info(f"Generating fused image with enhanced theme preservation... (strength: {optimal_strength}, guidance: {optimal_guidance}, steps: {optimal_steps})")
@@ -891,138 +911,98 @@ def analyze_reference_images(images: List[Image.Image]) -> Dict[str, Any]:
         }
         
         all_elements = []
+        dominant_colors = []
+        brightness_levels = []
         
         for img in images:
             if img.mode != "RGB":
                 img = img.convert("RGB")
             
-            # Analyze colors
+            # Analyze colors more thoroughly
             img_array = np.array(img)
-            colors = img_array.reshape(-1, 3)
             
-            # Get dominant colors
-            try:
-                from sklearn.cluster import KMeans
-                kmeans = KMeans(n_clusters=5, random_state=42)
-                kmeans.fit(colors)
-                dominant_colors = kmeans.cluster_centers_.astype(int)
-                
-                # Determine color palette type
-                avg_brightness = np.mean(colors)
-                if avg_brightness > 180:
-                    palette_type = "bright"
-                elif avg_brightness < 80:
-                    palette_type = "dark"
-                else:
-                    palette_type = "balanced"
-                
-                analysis["color_palettes"].append(palette_type)
-            except ImportError:
-                # Fallback if sklearn is not available
-                analysis["color_palettes"].append("balanced")
+            # Extract dominant colors
+            img_small = img.resize((50, 50))
+            colors = img_small.getcolors(maxcolors=2500)
+            if colors:
+                # Sort by frequency and get top colors
+                colors.sort(key=lambda x: x[0], reverse=True)
+                top_colors = colors[:5]
+                for count, color in top_colors:
+                    dominant_colors.append(color)
             
-            # Analyze composition (edge detection for object detection)
-            try:
-                gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-                edges = cv2.Canny(gray, 50, 150)
-                edge_density = np.sum(edges > 0) / edges.size
-                
-                if edge_density > 0.1:
-                    composition = "detailed"
-                elif edge_density > 0.05:
-                    composition = "moderate"
-                else:
-                    composition = "minimal"
-                
-                analysis["composition_styles"].append(composition)
-                
-                # Detect objects/props using contour analysis
-                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # Filter significant contours (potential objects/props)
-                significant_contours = [c for c in contours if cv2.contourArea(c) > 1000]
-                
-                if len(significant_contours) > 5:
-                    analysis["prop_elements"].append("multiple_objects")
-                elif len(significant_contours) > 2:
-                    analysis["prop_elements"].append("few_objects")
-                else:
-                    analysis["prop_elements"].append("minimal_objects")
-                    
-            except Exception as e:
-                logger.warning(f"Error in composition analysis: {e}")
-                analysis["composition_styles"].append("moderate")
-                analysis["prop_elements"].append("unknown_objects")
+            # Analyze brightness and contrast
+            gray = img.convert('L')
+            brightness = np.mean(np.array(gray))
+            brightness_levels.append(brightness)
             
-            # Analyze lighting
-            try:
-                brightness_std = np.std(gray)
-                if brightness_std > 50:
-                    lighting = "high_contrast"
-                elif brightness_std > 25:
-                    lighting = "moderate_contrast"
-                else:
-                    lighting = "low_contrast"
-                
-                analysis["lighting_conditions"].append(lighting)
-            except:
-                analysis["lighting_conditions"].append("moderate_contrast")
+            # Analyze composition (simple edge detection for complexity)
+            edges = cv2.Canny(np.array(gray), 50, 150)
+            edge_density = np.sum(edges > 0) / edges.size
             
-            # Detect theme elements based on color and composition patterns
-            theme_detected = []
-            
-            # Check for warm/cool color themes
-            avg_red = np.mean(colors[:, 0])
-            avg_blue = np.mean(colors[:, 1])
-            avg_green = np.mean(colors[:, 2])
-            
-            if avg_red > avg_blue + 20 and avg_red > avg_green + 20:
-                theme_detected.append("warm_theme")
-            elif avg_blue > avg_red + 20 and avg_blue > avg_green + 20:
-                theme_detected.append("cool_theme")
-            
-            # Check for setting elements based on edge patterns
-            if edge_density > 0.08:
-                theme_detected.append("detailed_setting")
-            elif edge_density < 0.03:
-                theme_detected.append("minimal_setting")
-            
-            analysis["theme_elements"].extend(theme_detected)
-            all_elements.extend(theme_detected)
+            if edge_density > 0.1:
+                analysis["composition_styles"].append("detailed")
+            else:
+                analysis["composition_styles"].append("simple")
         
-        # Determine overall characteristics
-        if len(set(analysis["color_palettes"])) == 1:
-            analysis["overall_mood"] = analysis["color_palettes"][0]
+        # Determine overall lighting
+        avg_brightness = np.mean(brightness_levels)
+        if avg_brightness > 150:
+            analysis["lighting_conditions"].append("bright")
+        elif avg_brightness < 80:
+            analysis["lighting_conditions"].append("dark")
+        else:
+            analysis["lighting_conditions"].append("balanced")
         
-        # Find common theme elements across all images
-        if analysis["theme_elements"]:
-            from collections import Counter
-            element_counts = Counter(analysis["theme_elements"])
-            common_elements = [elem for elem, count in element_counts.items() if count >= len(images) // 2]
-            analysis["dominant_elements"] = common_elements
+        # Analyze color harmony
+        if dominant_colors:
+            # Convert RGB to HSV for better color analysis
+            hsv_colors = []
+            for r, g, b in dominant_colors[:10]:  # Top 10 colors
+                h, s, v = colorsys.rgb_to_hsv(r/255, g/255, b/255)
+                hsv_colors.append((h*360, s*100, v*100))
+            
+            # Determine color scheme
+            hues = [h for h, s, v in hsv_colors if s > 20]  # Only saturated colors
+            if hues:
+                hue_range = max(hues) - min(hues)
+                if hue_range < 30:
+                    analysis["theme_elements"].append("monochromatic")
+                elif hue_range < 60:
+                    analysis["theme_elements"].append("analogous colors")
+                else:
+                    analysis["theme_elements"].append("diverse colors")
         
-        # Determine visual style consistency
-        if len(set(analysis["composition_styles"])) == 1:
-            analysis["visual_style"] = analysis["composition_styles"][0]
+        # Set overall mood based on brightness and colors
+        if avg_brightness > 150:
+            analysis["overall_mood"] = "bright and airy"
+        elif avg_brightness < 80:
+            analysis["overall_mood"] = "moody and dramatic"
+        else:
+            analysis["overall_mood"] = "balanced and natural"
         
-        # Add setting elements based on overall analysis
-        if analysis["prop_elements"]:
-            prop_counts = Counter(analysis["prop_elements"])
-            most_common_props = prop_counts.most_common(1)[0][0]
-            analysis["setting_elements"].append(most_common_props)
+        # Determine visual style
+        complexity = np.mean([1 if style == "detailed" else 0 for style in analysis["composition_styles"]])
+        if complexity > 0.7:
+            analysis["visual_style"] = "detailed and complex"
+        elif complexity < 0.3:
+            analysis["visual_style"] = "clean and minimal"
+        else:
+            analysis["visual_style"] = "balanced composition"
         
         return analysis
-        
+    
     except Exception as e:
         logger.error(f"Error analyzing reference images: {str(e)}")
+        # Return default analysis on error
         return {
-            "color_palettes": ["balanced"] * len(images),
-            "composition_styles": ["moderate"] * len(images),
-            "lighting_conditions": ["moderate_contrast"] * len(images),
-            "dominant_elements": [],
-            "theme_elements": [],
-            "prop_elements": [],
-            "setting_elements": [],
+            "color_palettes": ["balanced"],
+            "composition_styles": ["balanced"],
+            "lighting_conditions": ["balanced"],
+            "dominant_elements": ["general"],
+            "theme_elements": ["neutral"],
+            "prop_elements": ["standard"],
+            "setting_elements": ["general"],
             "overall_mood": "balanced",
             "visual_style": "balanced"
         }
@@ -1265,3 +1245,551 @@ def generate_pose_transfer_image(
     except Exception as e:
         logger.error(f"Error in pose transfer: {e}")
         return generate_fusion_image(prompt, reference_images)
+
+def generate_multi_view_fusion(
+    prompt: str,
+    reference_images: List[Image.Image],
+    model_name: str = "runwayml/stable-diffusion-v1-5",
+    negative_prompt: str = "blurry, low quality, distorted, deformed, inconsistent style, different car model, different color, different location, floating objects",
+    num_inference_steps: int = 80,
+    guidance_scale: float = 16.0,
+    strength: float = 0.35
+) -> str:
+    """
+    Generate new viewpoints from multiple reference images with enhanced consistency.
+    Optimized for scenarios like: front view car → side view car
+    
+    Args:
+        prompt: Requested viewpoint (e.g., "side view", "rear view", "from above")
+        reference_images: Multiple angles/views of the same subject
+        model_name: The diffusion model to use
+        negative_prompt: What to avoid in generation
+        num_inference_steps: Number of denoising steps
+        guidance_scale: How closely to follow the prompt
+        strength: How much to modify from reference (lower = more faithful)
+    
+    Returns:
+        Base64 encoded image string
+    """
+    try:
+        logger.info(f"Starting multi-view fusion with {len(reference_images)} reference images")
+        
+        # Check for GPU availability
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Initialize pipeline
+        if device == "cuda":
+            pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+                model_name,
+                torch_dtype=torch.float16,
+                use_safetensors=True
+            ).to(device)
+        else:
+            pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+                model_name,
+                torch_dtype=torch.float32
+            ).to(device)
+        
+        # Process and analyze all reference images
+        processed_images = []
+        for img in reference_images:
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            img = img.resize((512, 512), Image.Resampling.LANCZOS)
+            processed_images.append(img)
+        
+        # NEW APPROACH: Extract detailed text descriptions from all reference images
+        logger.info("Extracting detailed descriptions from reference images for multi-view fusion...")
+        image_descriptions = []
+        for i, img in enumerate(processed_images):
+            try:
+                description = extract_detailed_image_description(img)
+                image_descriptions.append(description)
+                logger.info(f"Multi-view: Extracted description for image {i+1}: {description[:100]}...")
+            except Exception as e:
+                logger.warning(f"Failed to extract description for image {i+1}: {str(e)}")
+                # Fallback to traditional analysis for this image
+                fallback_desc = _fallback_image_analysis(img)
+                image_descriptions.append(fallback_desc)
+        
+        # Merge extracted descriptions with user prompt for multi-view
+        logger.info("Merging image descriptions with viewpoint prompt for multi-view fusion...")
+        enhanced_prompt = merge_image_descriptions_with_prompt(image_descriptions, prompt)
+        
+        # Generate enhanced negative prompt based on descriptions
+        enhanced_negative_prompt = generate_enhanced_negative_prompt(image_descriptions, negative_prompt)
+        
+        logger.info(f"Multi-view enhanced prompt: {enhanced_prompt[:200]}...")
+        logger.info(f"Multi-view enhanced negative: {enhanced_negative_prompt[:200]}...")
+        
+        # Also run traditional analysis as backup for composite creation
+        analysis = analyze_reference_images(processed_images)
+        
+        # Create a composite reference that captures the most consistent elements
+        primary_reference = create_optimal_composite(processed_images, analysis)
+        
+        # Validate and optimize parameters based on prompt requirements
+        validation = validate_prompt_following(prompt, strength, guidance_scale)
+        
+        # Use validated parameters
+        optimal_strength = validation["adjusted_strength"]
+        optimal_guidance = validation["adjusted_guidance"] 
+        optimal_steps = max(num_inference_steps, 60)  # Sufficient quality steps
+        
+        # Log any warnings or adjustments
+        for warning in validation["warnings"]:
+            logger.warning(f"Parameter adjustment: {warning}")
+        
+        # Ensure strength is within reasonable bounds for prompt following
+        optimal_strength = max(min(optimal_strength, 0.8), 0.45)  # Allow good variation for prompt following
+        
+        logger.info(f"Generating multi-view fusion (strength: {optimal_strength}, guidance: {optimal_guidance})")
+        
+        # Generate with enhanced parameters
+        result = pipe(
+            prompt=enhanced_prompt,
+            negative_prompt=enhanced_negative_prompt,
+            image=primary_reference,
+            strength=optimal_strength,
+            guidance_scale=optimal_guidance,
+            num_inference_steps=optimal_steps,
+            num_images_per_prompt=1
+        )
+        
+        # Convert to base64
+        generated_image = result.images[0]
+        buffered = BytesIO()
+        generated_image.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        
+        logger.info("Multi-view fusion completed successfully")
+        return img_str
+        
+    except Exception as e:
+        logger.error(f"Error in multi-view fusion: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate multi-view fusion: {str(e)}"
+        )
+
+def create_optimal_composite(images: List[Image.Image], analysis: Dict[str, Any]) -> Image.Image:
+    """
+    Create an optimal composite image that preserves the most consistent elements
+    across multiple reference views.
+    """
+    if len(images) == 1:
+        return images[0]
+    
+    # Use the first image as base
+    primary = images[0]
+    primary_array = np.array(primary, dtype=np.float32)
+    
+    # For each additional image, blend only consistent regions
+    for i, img in enumerate(images[1:], 1):
+        img_array = np.array(img, dtype=np.float32)
+        
+        # Calculate similarity map using edge comparison
+        primary_gray = cv2.cvtColor(primary_array.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        img_gray = cv2.cvtColor(img_array.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        
+        # Find similar regions
+        diff = cv2.absdiff(primary_gray, img_gray)
+        similarity_mask = (diff < 50).astype(np.float32)  # Threshold for similarity
+        
+        # Expand mask to 3 channels
+        similarity_mask_3ch = np.stack([similarity_mask] * 3, axis=-1)
+        
+        # Blend only similar regions with decreasing weight
+        weight = 0.3 / (i + 1)  # Decreasing weight for later images
+        blend_mask = similarity_mask_3ch * weight
+        
+        primary_array = primary_array * (1 - blend_mask) + img_array * blend_mask
+    
+    # Convert back to PIL Image
+    composite = Image.fromarray(np.clip(primary_array, 0, 255).astype(np.uint8))
+    return composite
+
+def build_viewpoint_prompt(prompt: str, analysis: Dict[str, Any], num_references: int) -> str:
+    """
+    Build an enhanced prompt specifically for viewpoint generation
+    """
+    prompt_lower = prompt.lower()
+    
+    # Extract viewpoint request
+    viewpoint_terms = []
+    if "side" in prompt_lower:
+        viewpoint_terms.append("side profile view, lateral perspective")
+    if "rear" in prompt_lower or "back" in prompt_lower:
+        viewpoint_terms.append("rear view, back perspective")
+    if "front" in prompt_lower:
+        viewpoint_terms.append("front view, frontal perspective")
+    if "above" in prompt_lower or "top" in prompt_lower:
+        viewpoint_terms.append("top view, bird's eye perspective, overhead angle")
+    if "below" in prompt_lower or "underneath" in prompt_lower:
+        viewpoint_terms.append("bottom view, underneath perspective, low angle")
+    
+    # Build consistency terms based on analysis
+    consistency_terms = [
+        "exact same object",
+        "identical properties",
+        "same material",
+        "same color scheme",
+        "same lighting conditions",
+        "same environment",
+        "same background",
+        "maintain all original details"
+    ]
+    
+    # Add analysis-specific terms
+    if analysis.get("overall_mood"):
+        consistency_terms.append(f"same {analysis['overall_mood']} mood")
+    
+    if num_references > 1:
+        consistency_terms.append("consistent with all reference views")
+        consistency_terms.append("maintain cross-view consistency")
+    
+    # Combine everything
+    viewpoint_str = ", ".join(viewpoint_terms) if viewpoint_terms else "new perspective"
+    consistency_str = ", ".join(consistency_terms)
+    
+    enhanced_prompt = f"{prompt}, {viewpoint_str}, {consistency_str}, photorealistic, high quality, professional photography, sharp details"
+    
+    return enhanced_prompt
+
+def build_comprehensive_negatives(base_negative: str, analysis: Dict[str, Any]) -> str:
+    """
+    Build comprehensive negative prompts to avoid inconsistencies
+    """
+    general_negatives = [
+        "different object",
+        "different model",
+        "different color",
+        "different material",
+        "different lighting",
+        "different environment",
+        "floating objects",
+        "multiple objects",
+        "merged objects",
+        "deformed",
+        "distorted",
+        "blurry",
+        "low quality",
+        "artifacts",
+        "inconsistent perspective",
+        "impossible angles"
+    ]
+    
+    # Add analysis-specific negatives
+    analysis_negatives = []
+    if analysis.get("overall_mood") == "bright and airy":
+        analysis_negatives.extend(["dark", "gloomy", "dim"])
+    elif analysis.get("overall_mood") == "moody and dramatic":
+        analysis_negatives.extend(["bright", "overexposed", "washed out"])
+    
+    all_negatives = general_negatives + analysis_negatives
+    
+    return f"{base_negative}, {', '.join(all_negatives)}"
+
+def validate_prompt_following(prompt: str, strength: float, guidance_scale: float) -> Dict[str, Any]:
+    """
+    Validate and suggest optimal parameters for prompt following
+    """
+    suggestions = {
+        "adjusted_strength": strength,
+        "adjusted_guidance": guidance_scale,
+        "warnings": [],
+        "recommendations": []
+    }
+    
+    # Check if prompt suggests significant changes
+    change_indicators = [
+        "side view", "rear view", "front view", "top view", "bottom view",
+        "from above", "from below", "behind", "in front", 
+        "close-up", "wide shot", "different angle", "new perspective"
+    ]
+    
+    prompt_lower = prompt.lower()
+    significant_change = any(indicator in prompt_lower for indicator in change_indicators)
+    
+    if significant_change:
+        # For significant viewpoint changes, we need higher strength
+        if strength < 0.5:
+            suggestions["adjusted_strength"] = max(strength, 0.55)
+            suggestions["warnings"].append(f"Low strength ({strength}) may not follow prompt. Increased to {suggestions['adjusted_strength']}")
+        
+        # Ensure guidance is strong enough
+        if guidance_scale < 10.0:
+            suggestions["adjusted_guidance"] = max(guidance_scale, 12.0)
+            suggestions["warnings"].append(f"Low guidance ({guidance_scale}) may not follow prompt. Increased to {suggestions['adjusted_guidance']}")
+    
+    # Add recommendations based on prompt type
+    if any(word in prompt_lower for word in ["side", "rear", "back", "behind"]):
+        suggestions["recommendations"].append("For viewpoint changes, consider using Multi-View Fusion with multiple reference angles")
+    
+    if any(word in prompt_lower for word in ["close-up", "detail", "zoom"]):
+        suggestions["recommendations"].append("For detail shots, strength 0.6-0.7 works well")
+    
+    return suggestions
+
+# Enhanced Image Analysis Functions
+def extract_detailed_image_description(image: Image.Image) -> str:
+    """
+    Extract comprehensive text description from an image, similar to how a human would describe it.
+    This mimics detailed visual analysis to capture every background element, character, and theme.
+    
+    Args:
+        image: PIL Image object
+    
+    Returns:
+        Detailed text description of the image
+    """
+    try:
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        
+        img_array = np.array(image)
+        h, w = img_array.shape[:2]
+        
+        # Encode image as base64 for Gemini analysis
+        buffer = BytesIO()
+        image.save(buffer, format='PNG')
+        img_base64 = base64.b64encode(buffer.getvalue()).decode()
+        
+        # Optimized prompt for concise but comprehensive analysis
+        analysis_prompt = """Analyze this image and provide a concise but comprehensive description (aim for 800-1200 characters total). Focus on the most important visual elements:
+
+1. MAIN SUBJECTS: Key people, objects, or focal points
+2. SETTING: Environment type and key background elements
+3. LIGHTING & MOOD: Overall lighting quality and atmosphere
+4. COLOR SCHEME: Dominant colors and visual style
+5. COMPOSITION: Camera angle and visual arrangement
+
+Be specific and detailed but concise. Focus on elements that are most important for recreating this scene from a different angle. Avoid repetition and overly descriptive language."""
+
+        # Use Gemini to analyze the image
+        try:
+            # Create a proper image part for Gemini
+            image_part = {
+                "mime_type": "image/png",
+                "data": img_base64
+            }
+            
+            response = model.generate_content([analysis_prompt, image_part])
+            detailed_description = response.text
+            
+            # Limit description length to avoid overwhelming the generation AI
+            if len(detailed_description) > 1500:
+                # Truncate at the last complete sentence before 1500 chars
+                truncated = detailed_description[:1500]
+                last_period = truncated.rfind('.')
+                if last_period > 800:  # Ensure we don't truncate too much
+                    detailed_description = truncated[:last_period + 1]
+                else:
+                    detailed_description = truncated + "..."
+            
+            logger.info(f"Successfully extracted image description ({len(detailed_description)} characters)")
+            return detailed_description
+            
+        except Exception as gemini_error:
+            logger.warning(f"Gemini vision analysis failed: {gemini_error}, falling back to traditional analysis")
+            
+            # Fallback to traditional analysis if Gemini fails
+            return _fallback_image_analysis(image)
+            
+    except Exception as e:
+        logger.error(f"Error in detailed image description extraction: {str(e)}")
+        return _fallback_image_analysis(image)
+
+def _fallback_image_analysis(image: Image.Image) -> str:
+    """
+    Fallback image analysis using traditional computer vision techniques
+    """
+    try:
+        img_array = np.array(image)
+        h, w = img_array.shape[:2]
+        
+        # Color analysis
+        colors = image.getcolors(maxcolors=256*256*256)
+        if colors:
+            colors.sort(key=lambda x: x[0], reverse=True)
+            dominant_color = colors[0][1]
+            r, g, b = dominant_color
+            
+        # Brightness analysis
+        gray = image.convert('L')
+        brightness = np.mean(np.array(gray))
+        
+        # Edge analysis for complexity
+        edges = cv2.Canny(np.array(gray), 50, 150)
+        edge_density = np.sum(edges > 0) / edges.size
+        
+        # Generate basic description
+        lighting = "bright" if brightness > 150 else "dark" if brightness < 80 else "balanced"
+        complexity = "detailed and complex" if edge_density > 0.1 else "simple and clean"
+        color_desc = f"dominated by RGB({r}, {g}, {b})" if colors else "with varied colors"
+        
+        description = f"An image with {lighting} lighting, {complexity} composition, {color_desc}. The scene appears to have moderate visual complexity with various elements distributed throughout the frame."
+        
+        return description
+        
+    except Exception as e:
+        logger.error(f"Error in fallback image analysis: {str(e)}")
+        return "A photographic image with balanced lighting and standard composition."
+
+def merge_image_descriptions_with_prompt(image_descriptions: List[str], user_prompt: str) -> str:
+    """
+    Intelligently merge extracted image descriptions with user prompt to create
+    a cohesive generation prompt that preserves visual elements while incorporating the new angle.
+    
+    Args:
+        image_descriptions: List of detailed descriptions from reference images
+        user_prompt: User's desired viewpoint/angle prompt
+    
+    Returns:
+        Enhanced prompt optimized for accurate image generation
+    """
+    try:
+        logger.info("Creating intelligent combined prompt...")
+        
+        # Combine all descriptions
+        full_descriptions = " ".join(image_descriptions)
+        
+        # Use Gemini to intelligently extract and synthesize key visual elements
+        synthesis_prompt = f"""
+Analyze these image descriptions and create a concise prompt for AI image generation:
+
+IMAGE DESCRIPTIONS:
+{full_descriptions}
+
+USER'S NEW REQUIREMENT:
+{user_prompt}
+
+Create an optimized prompt for image generation (60-80 words maximum) that:
+1. Starts with the user's angle requirement
+2. Includes only the most essential visual elements: main subject, setting, lighting, key colors
+3. Uses clear, direct language (no flowery descriptions)
+4. Focuses on elements critical for visual consistency
+5. Avoids redundancy and unnecessary details
+
+Format: Single paragraph, maximum 80 words, direct and clear language for optimal image generation quality.
+"""
+
+        try:
+            # Use Gemini to create intelligent synthesis
+            response = model.generate_content(synthesis_prompt)
+            synthesized_prompt = response.text.strip()
+            
+            # Clean up the response (remove any formatting or extra text)
+            synthesized_prompt = re.sub(r'^.*?:', '', synthesized_prompt)  # Remove any leading labels
+            synthesized_prompt = synthesized_prompt.replace('\n', ' ').strip()
+            
+            # Ensure optimal length for image generation (max 400 characters)
+            if len(synthesized_prompt) > 400:
+                # Truncate at last complete phrase before 400 chars
+                truncated = synthesized_prompt[:400]
+                last_comma = truncated.rfind(', ')
+                if last_comma > 200:  # Ensure we don't truncate too much
+                    synthesized_prompt = truncated[:last_comma]
+                else:
+                    synthesized_prompt = truncated.rstrip(', .')
+            
+            logger.info(f"AI-synthesized prompt ({len(synthesized_prompt)} chars): {synthesized_prompt[:100]}...")
+            return synthesized_prompt
+            
+        except Exception as gemini_error:
+            logger.warning(f"Gemini synthesis failed: {gemini_error}, using fallback method")
+            
+            # Fallback: Extract key elements manually
+            combined_text = full_descriptions.lower()
+            
+            # Extract key visual elements
+            key_elements = []
+            
+            # Lighting
+            if "bright" in combined_text or "sunlight" in combined_text:
+                key_elements.append("bright natural lighting")
+            elif "soft" in combined_text and "light" in combined_text:
+                key_elements.append("soft lighting")
+            elif "dramatic" in combined_text:
+                key_elements.append("dramatic lighting")
+            
+            # Colors
+            color_match = re.search(r'(red|blue|green|yellow|orange|purple|black|white|silver|gold|brown)[^.]{0,20}', combined_text)
+            if color_match:
+                key_elements.append(f"{color_match.group(0)}")
+            
+            # Setting
+            if "outdoor" in combined_text:
+                key_elements.append("outdoor setting")
+            elif "indoor" in combined_text:
+                key_elements.append("indoor setting")
+            
+            # Objects/subjects
+            subjects = []
+            if "car" in combined_text:
+                subjects.append("car")
+            if "building" in combined_text:
+                subjects.append("building")
+            if "person" in combined_text or "people" in combined_text:
+                subjects.append("person")
+            
+            # Build fallback prompt
+            preserved_elements = ", ".join(key_elements[:4])  # Limit to key elements
+            subject_list = ", ".join(subjects[:2]) if subjects else "main subject"
+            
+            fallback_prompt = f"{user_prompt}, {subject_list}, {preserved_elements}, professional photography, consistent visual style"
+            
+            return fallback_prompt
+        
+    except Exception as e:
+        logger.error(f"Error in intelligent prompt merging: {str(e)}")
+        return f"{user_prompt}, maintaining the same visual theme and style from the reference images"
+        
+    except Exception as e:
+        logger.error(f"Error merging descriptions with prompt: {str(e)}")
+        return f"{user_prompt}, maintaining the same visual theme and style from the reference images"
+
+def generate_enhanced_negative_prompt(image_descriptions: List[str], base_negative: str) -> str:
+    """
+    Generate an enhanced negative prompt based on what should NOT be changed from the reference images
+    """
+    try:
+        # Analyze descriptions to understand what elements must be preserved
+        combined = " ".join(image_descriptions).lower()
+        
+        enhanced_negatives = [base_negative]
+        
+        # Add specific negatives based on image content
+        if "outdoor" in combined:
+            enhanced_negatives.append("indoor setting, interior space")
+        elif "indoor" in combined:
+            enhanced_negatives.append("outdoor setting, exterior space")
+        
+        if "bright" in combined or "sunny" in combined:
+            enhanced_negatives.append("dark, gloomy, night time, dim lighting")
+        elif "dark" in combined or "night" in combined:
+            enhanced_negatives.append("bright daylight, sunny, overexposed")
+        
+        if "car" in combined or "vehicle" in combined:
+            enhanced_negatives.append("different car model, different vehicle type, different color car")
+        
+        if "building" in combined or "architecture" in combined:
+            enhanced_negatives.append("different building, different architecture style")
+        
+        # General preservation negatives
+        enhanced_negatives.extend([
+            "completely different scene",
+            "different setting",
+            "different location", 
+            "different background",
+            "different lighting style",
+            "different color scheme",
+            "different visual style",
+            "inconsistent theme"
+        ])
+        
+        return ", ".join(enhanced_negatives)
+        
+    except Exception as e:
+        logger.error(f"Error generating enhanced negative prompt: {str(e)}")
+        return base_negative

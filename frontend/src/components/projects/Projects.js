@@ -26,10 +26,10 @@ import EditIcon from '@mui/icons-material/Edit';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
 
-const Projects = () => {
+const Projects = ({ projectType = "shot-suggestion", onProjectSelect }) => {
   const [projects, setProjects] = useState([]);
   const [open, setOpen] = useState(false);
-  const [newProject, setNewProject] = useState({ name: '', description: '' });
+  const [newProject, setNewProject] = useState({ name: '', description: '', project_type: projectType });
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState(null);
   const { user } = useAuth();
@@ -37,27 +37,30 @@ const Projects = () => {
 
   useEffect(() => {
     fetchProjects();
-  }, []);
-
+  }, [projectType]);
   const fetchProjects = async () => {
     try {
       const token = localStorage.getItem('token');
       const response = await axios.get('http://localhost:8000/projects', {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setProjects(response.data);
+      // Filter projects by type
+      const filteredProjects = response.data.filter(project => 
+        (project.project_type || 'shot-suggestion') === projectType
+      );
+      setProjects(filteredProjects);
     } catch (error) {
       console.error('Error fetching projects:', error);
     }
   };
-
   const handleCreateProject = async () => {
     try {
       const token = localStorage.getItem('token');
       await axios.post('http://localhost:8000/projects', 
         {
           name: newProject.name,
-          description: newProject.description
+          description: newProject.description,
+          project_type: projectType
         },
         {
           headers: { 
@@ -68,7 +71,7 @@ const Projects = () => {
       );
 
       setOpen(false);
-      setNewProject({ name: '', description: '' });
+      setNewProject({ name: '', description: '', project_type: projectType });
       fetchProjects();
     } catch (error) {
       console.error('Error creating project:', error);
@@ -99,17 +102,16 @@ const Projects = () => {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      {/* Create New Project Section */}
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>      {/* Create New Project Section */}
       <Paper sx={{ p: 3, mb: 4 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
           <AddIcon sx={{ mr: 1 }} />
           <Typography variant="h5" component="h2">
-            Create New Project
+            Create New {projectType === 'image-fusion' ? 'Image Fusion' : 'Shot Suggestion'} Project
           </Typography>
         </Box>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-          Start a new project to generate and organize your shots
+          Start a new project to {projectType === 'image-fusion' ? 'blend reference images with your creative vision' : 'generate and organize your shots'}
         </Typography>
         <Button
           variant="contained"
@@ -119,17 +121,15 @@ const Projects = () => {
         >
           Create New Project
         </Button>
-      </Paper>
-
-      {/* Existing Projects Section */}
+      </Paper>      {/* Existing Projects Section */}
       <Paper sx={{ p: 3 }}>
         <Typography variant="h5" component="h2" gutterBottom>
-          My Projects
+          My {projectType === 'image-fusion' ? 'Image Fusion' : 'Shot Suggestion'} Projects
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
           {projects.length === 0 
-            ? "You haven't created any projects yet. Create your first project to get started!"
-            : "Select a project to view and manage its shots"}
+            ? `You haven't created any ${projectType === 'image-fusion' ? 'image fusion' : 'shot suggestion'} projects yet. Create your first project to get started!`
+            : `Select a project to ${projectType === 'image-fusion' ? 'start blending images' : 'view and manage its shots'}`}
         </Typography>
         
         <Grid container spacing={3}>
@@ -145,9 +145,19 @@ const Projects = () => {
                     cursor: 'pointer'
                   }
                 }}
-              >
-                <CardContent 
-                  onClick={() => navigate(`/projects/${project.id}`)}
+              >                <CardContent 
+                  onClick={() => {
+                    if (onProjectSelect) {
+                      onProjectSelect(project);
+                    } else {
+                      // Navigate based on project type
+                      if (projectType === 'image-fusion') {
+                        navigate(`/image-fusion?projectId=${project.id}`);
+                      } else {
+                        navigate(`/shot-suggestor?projectId=${project.id}`);
+                      }
+                    }
+                  }}
                   sx={{ flexGrow: 1, cursor: 'pointer' }}
                 >
                   <Typography variant="h6" component="h3" gutterBottom>

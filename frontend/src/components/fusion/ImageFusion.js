@@ -15,23 +15,39 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  Tooltip
+  Tooltip,
+  Container
 } from '@mui/material';
 import {
   CloudUpload,
   Delete,
   Download,
   Clear,
-  AutoAwesome,
-  Help
+  AutoAwesome,  Help,
+  ExpandMore,
+  ExpandLess,
+  PhotoCamera,
+  Psychology,
+  CameraAlt
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 
-const ImageFusion = () => {
-  const { token } = useAuth();
+const ImageFusion = ({ projectId }) => {
+  const auth = useAuth();
+  const token = auth?.token;
   const [referenceImages, setReferenceImages] = useState([]);
-  const [prompt, setPrompt] = useState('');
-  const [generatedImage, setGeneratedImage] = useState(null);
+  const [imageAnalyses, setImageAnalyses] = useState([]);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisComplete, setAnalysisComplete] = useState(false);
+  const [expandedDescriptions, setExpandedDescriptions] = useState(new Set());
+  const [combinedPrompt, setCombinedPrompt] = useState('');
+  const [combinedPromptData, setCombinedPromptData] = useState(null);
+  const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);  const [showCombinedPrompt, setShowCombinedPrompt] = useState(false);
+  const [currentStep, setCurrentStep] = useState(1);
+  const [prompt, setPrompt] = useState('');  const [finalPrompt, setFinalPrompt] = useState('');
+  const [showFinalPrompt, setShowFinalPrompt] = useState(false);
+  const [generatedImages, setGeneratedImages] = useState([]);
+  const [currentGeneratedImage, setCurrentGeneratedImage] = useState(null);
   const [error, setError] = useState('');
   const [fusionLoading, setFusionLoading] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -49,14 +65,34 @@ const ImageFusion = () => {
       preview: URL.createObjectURL(file)
     }));
     setReferenceImages(prev => [...prev, ...newImages]);
-    setError('');
+    setError('');    // Reset all analysis and prompt state when new images are uploaded
+    setImageAnalyses([]);
+    setAnalysisComplete(false);
+    setCombinedPrompt('');
+    setCombinedPromptData(null);
+    setShowCombinedPrompt(false);
+    setShowFinalPrompt(false);
+    setFinalPrompt('');
+    setGeneratedImages([]);
+    setCurrentGeneratedImage(null);
+    setCurrentStep(1);
   };
 
   const removeImage = (index) => {
     setReferenceImages(prev => {
       const newImages = prev.filter((_, i) => i !== index);
       return newImages;
-    });
+    });    // Reset all analysis and prompt state when images are removed
+    setImageAnalyses([]);
+    setAnalysisComplete(false);
+    setCombinedPrompt('');
+    setCombinedPromptData(null);
+    setShowCombinedPrompt(false);
+    setShowFinalPrompt(false);
+    setFinalPrompt('');
+    setGeneratedImages([]);
+    setCurrentGeneratedImage(null);
+    setCurrentStep(1);
   };
 
   const handlePreviewImage = (image) => {
@@ -64,43 +100,24 @@ const ImageFusion = () => {
     setPreviewOpen(true);
   };
 
-  const handleGenerateFusion = async () => {
+  const handleAnalyzeImages = async () => {
     if (referenceImages.length === 0) {
       setError('Please upload at least one reference image');
       return;
     }
 
-    if (!prompt.trim()) {
-      setError('Please enter a description of the new angle/view');
-      return;
-    }
-
-    setFusionLoading(true);
+    setAnalysisLoading(true);
     setError('');
-    setProgressStep(0);
-    setGenerationProgress('Initializing...');
 
     try {
-      // Step 1: Preparing data
-      setProgressStep(1);
-      setGenerationProgress('Preparing reference images...');
-      
       const formData = new FormData();
-      formData.append('prompt', prompt);
-      // Backend now has optimized default parameters for better "same world, new angle" generation
-      // strength: 0.55, guidance_scale: 13.0, num_inference_steps: 90
-      // These are automatically applied by the backend for optimal results
-
-      // Add all reference images - use 'files' field name to match backend
+      
+      // Add all reference images
       referenceImages.forEach((imageObj) => {
         formData.append('files', imageObj.file);
       });
 
-      // Step 2: Sending request
-      setProgressStep(2);
-      setGenerationProgress('Analyzing reference images...');
-
-      const response = await fetch('http://localhost:8000/api/theme-preserve', {
+      const response = await fetch('http://localhost:8000/api/analyze-images', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -117,7 +134,140 @@ const ImageFusion = () => {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate theme-preserving image');
+        throw new Error(errorData.detail || 'Failed to analyze images');
+      }
+
+      const data = await response.json();
+      setImageAnalyses(data.analyses);
+      setAnalysisComplete(true);
+      setCurrentStep(3); // Move to prompt entry step
+      
+      // Show success message
+      if (data.summary.failed_analyses > 0) {
+        setError(`Analysis completed with ${data.summary.failed_analyses} failed images. See details below.`);
+      }
+
+    } catch (err) {
+      setError(err.message);
+      setAnalysisComplete(false);
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
+  const handlePreviewCombinedPrompt = async () => {
+    if (!prompt.trim()) {
+      setError('Please enter your desired angle/viewpoint prompt');
+      return;
+    }
+
+    if (!analysisComplete || imageAnalyses.length === 0) {
+      setError('Please analyze your images first');
+      return;
+    }
+
+    setPromptPreviewLoading(true);
+    setError('');
+
+    try {
+      // Extract successful descriptions
+      const successfulDescriptions = imageAnalyses
+        .filter(analysis => analysis.status === 'success')
+        .map(analysis => analysis.description);
+
+      if (successfulDescriptions.length === 0) {
+        setError('No successful image analyses found to combine with your prompt');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('user_prompt', prompt);
+      formData.append('image_descriptions', JSON.stringify(successfulDescriptions));
+
+      const response = await fetch('http://localhost:8000/api/preview-combined-prompt', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (response.status === 401) {
+        setError('Session expired. Please log in again.');
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+        return;
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to preview combined prompt');
+      }      const data = await response.json();
+      setCombinedPrompt(data.combined_prompt);
+      setCombinedPromptData(data);
+      
+      // Automatically generate and set the final prompt combining AI analysis with user angle
+      const combinedAnalysis = data.combined_prompt || '';
+      const finalPromptText = `${combinedAnalysis}, viewed from ${prompt}`.trim();
+      setFinalPrompt(finalPromptText);
+      setShowFinalPrompt(true);
+      setCurrentStep(4); // Move to final prompt editing step
+
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPromptPreviewLoading(false);
+    }  };
+
+  const handleGenerateImage = async () => {
+    if (!finalPrompt.trim()) {
+      setError('Please enter a final prompt');
+      return;
+    }
+
+    setFusionLoading(true);
+    setError('');
+    setProgressStep(0);
+    setGenerationProgress('Initializing...');
+
+    try {
+      // Step 1: Preparing data
+      setProgressStep(1);
+      setGenerationProgress('Preparing reference images...');
+      
+      const formData = new FormData();
+      formData.append('prompt', finalPrompt);
+
+      // Add all reference images
+      referenceImages.forEach((imageObj) => {
+        formData.append('files', imageObj.file);
+      });
+
+      // Step 2: Sending request
+      setProgressStep(2);
+      setGenerationProgress('Analyzing reference images...');
+
+      // Use enhanced fusion endpoint
+      const endpoint = 'http://localhost:8000/api/enhanced-fusion';
+      setGenerationProgress('Analyzing images with AI vision...');
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (response.status === 401) {
+        setError('Session expired. Please log in again.');
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+        return;
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to generate image with new viewpoint');
       }
 
       // Step 3: Processing response
@@ -125,7 +275,17 @@ const ImageFusion = () => {
       setGenerationProgress('Processing generated image...');
 
       const data = await response.json();
-      setGeneratedImage(data.image);
+      
+      // Add to generated images array with timestamp
+      const newImage = {
+        id: Date.now(),
+        image: data.image,
+        prompt: finalPrompt,
+        timestamp: new Date().toLocaleString()
+      };
+      
+      setGeneratedImages(prev => [newImage, ...prev]);
+      setCurrentGeneratedImage(newImage);
 
       // Step 4: Complete
       setProgressStep(4);
@@ -141,64 +301,134 @@ const ImageFusion = () => {
         setGenerationProgress('');
         setProgressStep(0);
       }, 2000);
-    }
-  };
+    }  };
 
-  const handleDownload = () => {
-    if (generatedImage) {
+  const handleDownload = (imageData = null) => {
+    const imageToDownload = imageData || currentGeneratedImage?.image;
+    if (imageToDownload) {
       const link = document.createElement('a');
-      link.href = `data:image/png;base64,${generatedImage}`;
-      link.download = 'fusion-image.png';
+      link.href = `data:image/png;base64,${imageToDownload}`;
+      link.download = `fusion-image-${Date.now()}.png`;
       link.click();
     }
   };
-
   const clearAll = () => {
     setReferenceImages([]);
     setPrompt('');
-    setGeneratedImage(null);
+    setCurrentGeneratedImage(null);
+    setGeneratedImages([]);
+    setFinalPrompt('');
+    setShowFinalPrompt(false);
     setError('');
     setGenerationProgress('');
     setProgressStep(0);
+    setImageAnalyses([]);
+    setAnalysisComplete(false);
+    setCombinedPrompt('');
+    setCombinedPromptData(null);
+    setShowCombinedPrompt(false);
+    setCurrentStep(1);
   };
 
-  return (
-    <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto' }}>
-      <Typography variant="h4" gutterBottom>
-        🎬 Same World, New Angle
-      </Typography>
-      
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 3 }}>
-        <Typography variant="body1" color="text.secondary" sx={{ flex: 1 }}>
-          Upload images of your scene, then describe the angle you want. The AI will show you the exact same world from that new perspective - including elements not visible in your reference images. Uses optimized parameters for maximum world preservation.
-        </Typography>
-        <Tooltip title="Learn how to use this tool">
-          <IconButton 
-            size="small" 
-            onClick={() => setHelpOpen(true)}
-            sx={{ mt: -0.5 }}
-          >
-            <Help color="primary" />
-          </IconButton>
-        </Tooltip>
+  const toggleDescriptionExpansion = (index) => {
+    const newExpanded = new Set(expandedDescriptions);
+    if (newExpanded.has(index)) {
+      newExpanded.delete(index);
+    } else {
+      newExpanded.add(index);
+    }
+    setExpandedDescriptions(newExpanded);
+  };
+
+  // Safety check to prevent rendering before auth is ready
+  if (!auth) {
+    return (
+      <Box sx={{ p: 3, display: 'flex', justifyContent: 'center' }}>
+        <CircularProgress />
       </Box>
+    );
+  }  return (
+    <Box sx={{ 
+      minHeight: '100vh', 
+      bgcolor: 'hsl(0, 0%, 100%)', // --background
+      color: 'hsl(222.2, 84%, 4.9%)', // --foreground
+      p: 2,
+      pt: 10 // Added padding-top for navbar spacing
+    }}>
+      <Container maxWidth={false} sx={{ maxWidth: '100%', px: 2 }}>        {/* Header */}
+        <Box sx={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center', 
+          mb: 3,
+          borderBottom: '1px solid hsl(214.3, 31.8%, 91.4%)', // --border
+          pb: 2
+        }}>          <Typography variant="h4" sx={{ fontWeight: 'bold', color: 'hsl(222.2, 47.4%, 11.2%)' }}> {/* --primary */}
+            🚀 Smart Angle Generator
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Tooltip title="Get help with the workflow">
+              <IconButton 
+                onClick={() => setHelpOpen(true)} 
+                sx={{ 
+                  color: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                  '&:hover': {
+                    bgcolor: 'hsl(210, 40%, 96.1%)', // --muted
+                    color: 'hsl(222.2, 47.4%, 11.2%)' // --primary
+                  }
+                }}
+              >
+                <Help />
+              </IconButton>
+            </Tooltip>
+            <Button 
+              variant="outlined" 
+              startIcon={<Clear />}
+              onClick={clearAll}
+              disabled={fusionLoading}
+              sx={{
+                borderColor: 'hsl(214.3, 31.8%, 91.4%)', // --border
+                color: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                fontWeight: 'bold',
+                '&:hover': {
+                  borderColor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+                  bgcolor: 'hsl(210, 40%, 96.1%)', // --muted
+                  color: 'hsl(222.2, 47.4%, 11.2%)' // --primary
+                }
+              }}
+            >
+              Clear All
+            </Button>
+          </Box>
+        </Box>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
-        </Alert>
-      )}
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}        {/* Main Workflow - 3 Steps Side by Side */}
+        <Grid container spacing={3} sx={{ mb: 3 }}>          {/* Step 1: Upload Images */}
+          <Grid item xs={12} md={4}>
+            <Paper sx={{ 
+              p: 3, 
+              height: '100%',
+              bgcolor: referenceImages.length > 0 ? 'hsl(210, 40%, 96.1%)' : 'hsl(0, 0%, 100%)', // --muted : --card
+              border: '2px solid',
+              borderColor: referenceImages.length > 0 ? 'hsl(222.2, 47.4%, 11.2%)' : 'hsl(214.3, 31.8%, 91.4%)', // --primary : --border
+              borderRadius: 2,
+              transition: 'all 0.2s ease-in-out',
+              '&:hover': {
+                borderColor: 'hsl(215.4, 16.3%, 46.9%)' // --muted-foreground
+              }
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <PhotoCamera sx={{ color: 'hsl(222.2, 47.4%, 11.2%)' }} /> {/* --primary */}
+                <Typography variant="h6" sx={{ color: 'hsl(222.2, 47.4%, 11.2%)', fontWeight: 'bold' }}> {/* --primary */}
+                  Step 1: Upload Images
+                </Typography>
+              </Box>
 
-      <Grid container spacing={3}>
-        {/* Left Panel - Input */}
-        <Grid item xs={12} md={6}>
-          <Paper sx={{ p: 3, height: 'fit-content' }}>
-            <Typography variant="h6" gutterBottom>
-              📸 Your Scene Images
-            </Typography>
-
-            {/* Image Upload */}
-            <Box sx={{ mb: 3 }}>
+              {/* Upload Button */}
               <input
                 type="file"
                 multiple
@@ -208,32 +438,40 @@ const ImageFusion = () => {
                 style={{ display: 'none' }}
               />
               <Button
-                variant="outlined"
+                variant="contained"
                 startIcon={<CloudUpload />}
                 onClick={() => fileInputRef.current.click()}
                 fullWidth
-                sx={{ mb: 2 }}
+                size="large"
+                sx={{ 
+                  mb: 2,
+                  bgcolor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+                  color: 'hsl(210, 40%, 98%)', // --primary-foreground
+                  fontWeight: 'bold',
+                  '&:hover': {
+                    bgcolor: 'hsl(222.2, 84%, 4.9%)' // --foreground (darker)
+                  }
+                }}
               >
-                Upload Scene Images (1-5 photos)
+                Upload Scene Images
               </Button>
-              
-              {referenceImages.length > 0 && (
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  {referenceImages.length} scene image(s) uploaded
-                </Typography>
-              )}
-            </Box>
 
-            {/* Reference Images Grid */}
-            {referenceImages.length > 0 && (
-              <Box sx={{ mb: 3 }}>
+              {/* Images Grid */}
+              {referenceImages.length > 0 && (
                 <Grid container spacing={1}>
                   {referenceImages.map((imageObj, index) => (
-                    <Grid item xs={6} sm={4} key={index}>
-                      <Card sx={{ position: 'relative' }}>
+                    <Grid item xs={6} key={index}>
+                      <Card sx={{ 
+                        position: 'relative',
+                        borderRadius: 1,
+                        transition: 'transform 0.2s ease-in-out',
+                        '&:hover': {
+                          transform: 'scale(1.02)'
+                        }
+                      }}>
                         <CardMedia
                           component="img"
-                          height="120"
+                          height="80"
                           image={imageObj.preview}
                           alt={imageObj.name}
                           sx={{ cursor: 'pointer' }}
@@ -243,261 +481,550 @@ const ImageFusion = () => {
                           size="small"
                           sx={{
                             position: 'absolute',
-                            top: 4,
-                            right: 4,
-                            bgcolor: 'rgba(0,0,0,0.5)',
+                            top: 2,
+                            right: 2,
+                            bgcolor: 'rgba(0,0,0,0.6)',
                             color: 'white',
-                            '&:hover': { bgcolor: 'rgba(0,0,0,0.7)' }
+                            '&:hover': { bgcolor: 'rgba(0,0,0,0.8)' }
                           }}
                           onClick={() => removeImage(index)}
                         >
-                          <Delete />
+                          <Delete fontSize="small" />
                         </IconButton>
                       </Card>
                     </Grid>
                   ))}
                 </Grid>
+              )}
+            </Paper>
+          </Grid>          {/* Step 2: Analyze Images */}
+          <Grid item xs={12} md={4}>
+            <Paper sx={{ 
+              p: 3, 
+              height: '100%',
+              bgcolor: analysisComplete ? 'hsl(210, 40%, 96.1%)' : 'hsl(0, 0%, 100%)', // --muted : --card
+              border: '2px solid',
+              borderColor: analysisComplete ? 'hsl(222.2, 47.4%, 11.2%)' : 'hsl(214.3, 31.8%, 91.4%)', // --primary : --border
+              borderRadius: 2,
+              transition: 'all 0.2s ease-in-out',
+              '&:hover': {
+                borderColor: 'hsl(215.4, 16.3%, 46.9%)' // --muted-foreground
+              }
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <Psychology sx={{ color: 'hsl(222.2, 47.4%, 11.2%)' }} /> {/* --primary */}
+                <Typography variant="h6" sx={{ color: 'hsl(222.2, 47.4%, 11.2%)', fontWeight: 'bold' }}> {/* --primary */}
+                  Step 2: AI Analysis
+                </Typography>
               </Box>
-            )}
+              
+              <Button
+                variant="contained"
+                onClick={handleAnalyzeImages}
+                disabled={analysisLoading || referenceImages.length === 0}
+                startIcon={analysisLoading ? <CircularProgress size={20} color="inherit" /> : <AutoAwesome />}
+                fullWidth
+                size="large"
+                sx={{ 
+                  mb: 2,
+                  bgcolor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+                  color: 'hsl(210, 40%, 98%)', // --primary-foreground
+                  fontWeight: 'bold',
+                  '&:hover': {
+                    bgcolor: 'hsl(222.2, 84%, 4.9%)' // --foreground (darker)
+                  },
+                  '&:disabled': {
+                    bgcolor: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                    color: 'hsl(210, 40%, 98%)' // --primary-foreground
+                  }
+                }}
+              >
+                {analysisLoading ? 'Analyzing...' : 'Analyze Images'}
+              </Button>
 
-            {/* Prompt Input */}
-            <Box sx={{ mb: 3 }}>
-              <Typography variant="h6" gutterBottom>
-                🎯 Desired Angle
-              </Typography>
+              {/* Analysis Results */}
+              {imageAnalyses.length > 0 && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom sx={{ color: 'hsl(222.2, 47.4%, 11.2%)' }}> {/* --primary */}
+                    Analysis Results:
+                  </Typography>
+                  {imageAnalyses.map((analysis, index) => (
+                    <Box key={index} sx={{ 
+                      p: 1, 
+                      mb: 1, 
+                      borderRadius: 1,
+                      bgcolor: analysis.status === 'success' ? 'hsl(210, 40%, 96.1%)' : 'hsl(0, 84.2%, 95%)', // --muted : light destructive
+                      border: '1px solid',
+                      borderColor: analysis.status === 'success' ? 'hsl(214.3, 31.8%, 91.4%)' : 'hsl(0, 84.2%, 60.2%)' // --border : --destructive
+                    }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Typography variant="caption" sx={{ 
+                          fontWeight: 'bold',
+                          color: analysis.status === 'success' ? 'hsl(222.2, 47.4%, 11.2%)' : 'hsl(0, 84.2%, 60.2%)' // --primary : --destructive
+                        }}>
+                          {analysis.status === 'success' ? '✅' : '❌'} {analysis.filename}
+                        </Typography>
+                        {analysis.status === 'success' && (
+                          <Button
+                            size="small"
+                            variant="text"
+                            onClick={() => toggleDescriptionExpansion(index)}
+                            sx={{ 
+                              textTransform: 'none',
+                              minWidth: 'auto',
+                              p: 0.5,
+                              fontSize: '0.7rem',
+                              color: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                              '&:hover': {
+                                color: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+                                bgcolor: 'hsl(210, 40%, 96.1%)' // --muted
+                              }
+                            }}
+                          >
+                            {expandedDescriptions.has(index) ? 'Hide' : 'View'}
+                          </Button>
+                        )}
+                      </Box>
+                      
+                      {analysis.status === 'success' && (
+                        <>
+                          <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem', color: 'hsl(215.4, 16.3%, 46.9%)' }}> {/* --muted-foreground */}
+                            {analysis.description.length} characters extracted
+                          </Typography>
+                          
+                          {expandedDescriptions.has(index) && (
+                            <Box sx={{ 
+                              mt: 1,
+                              p: 1,
+                              bgcolor: 'hsl(0, 0%, 100%)', // --card
+                              borderRadius: 0.5,
+                              border: '1px solid hsl(214.3, 31.8%, 91.4%)', // --border
+                              maxHeight: 150,
+                              overflowY: 'auto'
+                            }}>
+                              <Typography variant="caption" sx={{ 
+                                fontFamily: 'monospace',
+                                fontSize: '0.7rem',
+                                lineHeight: 1.3,
+                                whiteSpace: 'pre-wrap',
+                                color: 'hsl(222.2, 84%, 4.9%)' // --foreground
+                              }}>
+                                {analysis.description}
+                              </Typography>
+                            </Box>
+                          )}
+                        </>
+                      )}
+                      
+                      {analysis.status === 'error' && (
+                        <Typography variant="caption" display="block" sx={{ fontSize: '0.7rem', color: 'hsl(0, 84.2%, 60.2%)' }}> {/* --destructive */}
+                          Error: {analysis.error}
+                        </Typography>
+                      )}
+                    </Box>
+                  ))}
+                </Box>
+              )}
+            </Paper>
+          </Grid>          {/* Step 3: Enter Desired Angle */}
+          <Grid item xs={12} md={4}>
+            <Paper sx={{ 
+              p: 3, 
+              height: '100%',
+              bgcolor: prompt.trim() && analysisComplete ? 'hsl(210, 40%, 96.1%)' : 'hsl(0, 0%, 100%)', // --muted : --card
+              border: '2px solid',
+              borderColor: prompt.trim() && analysisComplete ? 'hsl(222.2, 47.4%, 11.2%)' : 'hsl(214.3, 31.8%, 91.4%)', // --primary : --border
+              borderRadius: 2,
+              transition: 'all 0.2s ease-in-out',
+              '&:hover': {
+                borderColor: 'hsl(215.4, 16.3%, 46.9%)' // --muted-foreground
+              }
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <CameraAlt sx={{ color: 'hsl(222.2, 47.4%, 11.2%)' }} /> {/* --primary */}
+                <Typography variant="h6" sx={{ color: 'hsl(222.2, 47.4%, 11.2%)', fontWeight: 'bold' }}> {/* --primary */}
+                  Step 3: Desired Angle
+                </Typography>
+              </Box>
+
               <TextField
                 fullWidth
                 multiline
                 rows={4}
                 variant="outlined"
-                placeholder="Describe the angle you want to see. Examples: 'Close-up from above', 'Show feet of the king', 'Camera at ground level', 'Behind the throne', 'Low angle shot', 'Bird's eye view'"
+                placeholder="Enter your desired angle or viewpoint..."
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                sx={{ mb: 1 }}
+                sx={{ 
+                  mb: 2,
+                  '& .MuiOutlinedInput-root': {
+                    '& fieldset': {
+                      borderColor: 'hsl(214.3, 31.8%, 91.4%)' // --border
+                    },
+                    '&:hover fieldset': {
+                      borderColor: 'hsl(215.4, 16.3%, 46.9%)' // --muted-foreground
+                    },
+                    '&.Mui-focused fieldset': {
+                      borderColor: 'hsl(222.2, 47.4%, 11.2%)' // --primary
+                    }
+                  },
+                  '& .MuiInputBase-input': {
+                    color: 'hsl(222.2, 84%, 4.9%)' // --foreground
+                  },
+                  '& .MuiInputBase-input::placeholder': {
+                    color: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                    opacity: 1
+                  }
+                }}
+                disabled={!analysisComplete}
               />
-              <Typography variant="body2" color="text.secondary">
-                The AI will show you the same world from this new angle, including elements not visible in your reference images.
-              </Typography>
-            </Box>
+              
+              {analysisComplete && prompt.trim() && (
+                <Button
+                  variant="contained"
+                  onClick={handlePreviewCombinedPrompt}
+                  disabled={promptPreviewLoading}
+                  startIcon={promptPreviewLoading ? <CircularProgress size={20} color="inherit" /> : <AutoAwesome />}                  fullWidth
+                  size="large"
+                  sx={{
+                    bgcolor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+                    color: 'hsl(210, 40%, 98%)', // --primary-foreground
+                    fontWeight: 'bold',
+                    '&:hover': {
+                      bgcolor: 'hsl(222.2, 84%, 4.9%)' // --foreground (darker)
+                    },
+                    '&:disabled': {
+                      bgcolor: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                      color: 'hsl(210, 40%, 98%)' // --primary-foreground
+                    }
+                  }}
+                >
+                  {promptPreviewLoading ? 'Creating Final Prompt...' : 'Create Final Prompt'}
+                </Button>
+              )}
+            </Paper>
+          </Grid>
+        </Grid>        {/* Step 4: Final Prompt Editing & Generation */}
+        {showFinalPrompt && (
+          <Paper sx={{ 
+            p: 3, 
+            mb: 3, 
+            bgcolor: 'hsl(210, 40%, 96.1%)', // --muted
+            border: '2px solid hsl(214.3, 31.8%, 91.4%)', // --border
+            borderRadius: 2
+          }}>
+            <Typography variant="h6" gutterBottom sx={{ 
+              color: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+              fontWeight: 'bold',
+              mb: 1
+            }}>
+              🚀 Step 4: Final Prompt & Generate
+            </Typography>
+              <Typography variant="body2" sx={{ mb: 3, color: 'hsl(215.4, 16.3%, 46.9%)' }}> {/* --muted-foreground */}
+              The final prompt below combines your reference images with your desired angle. You can edit it if needed, then generate your image. Generate multiple variations by editing the prompt each time.
+            </Typography>
+            
+            <Grid container spacing={3}>
+              {/* Final Prompt Editor */}
+              <Grid item xs={12} md={8}>                <TextField
+                  fullWidth
+                  multiline
+                  rows={6}
+                  variant="outlined"
+                  label="Final Generation Prompt (Auto-Generated, Editable)"
+                  helperText="This prompt combines your reference images with your desired angle. Edit as needed before generating."
+                  value={finalPrompt}
+                  onChange={(e) => setFinalPrompt(e.target.value)}
+                  sx={{ 
+                    mb: 2,
+                    '& .MuiOutlinedInput-root': {
+                      '& fieldset': {
+                        borderColor: 'hsl(214.3, 31.8%, 91.4%)' // --border
+                      },
+                      '&:hover fieldset': {
+                        borderColor: 'hsl(215.4, 16.3%, 46.9%)' // --muted-foreground
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: 'hsl(222.2, 47.4%, 11.2%)' // --primary
+                      }
+                    },
+                    '& .MuiInputBase-input': {
+                      color: 'hsl(222.2, 84%, 4.9%)', // --foreground
+                      fontSize: '0.9rem',
+                      lineHeight: 1.4
+                    },                    '& .MuiInputLabel-root': {
+                      color: 'hsl(215.4, 16.3%, 46.9%)' // --muted-foreground
+                    },
+                    '& .MuiFormHelperText-root': {
+                      color: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                      fontSize: '0.75rem'
+                    }
+                  }}
+                />
+                
+                <Button
+                  variant="contained"
+                  onClick={handleGenerateImage}
+                  disabled={fusionLoading || !finalPrompt.trim()}
+                  startIcon={fusionLoading ? <CircularProgress size={20} color="inherit" /> : <AutoAwesome />}
+                  size="large"
+                  sx={{
+                    bgcolor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+                    color: 'hsl(210, 40%, 98%)', // --primary-foreground
+                    fontWeight: 'bold',
+                    py: 1.5,
+                    px: 4,
+                    '&:hover': {
+                      bgcolor: 'hsl(222.2, 84%, 4.9%)' // --foreground (darker)
+                    },
+                    '&:disabled': {
+                      bgcolor: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                      color: 'hsl(210, 40%, 98%)' // --primary-foreground
+                    }
+                  }}
+                >
+                  {fusionLoading ? 'Generating Image...' : 'Generate Image'}
+                </Button>
+              </Grid>
+              
+              {/* Generation Info */}
+              <Grid item xs={12} md={4}>
+                <Box sx={{ 
+                  p: 2, 
+                  bgcolor: 'hsl(0, 0%, 100%)', // --card
+                  borderRadius: 1,
+                  border: '1px solid hsl(214.3, 31.8%, 91.4%)', // --border
+                  height: 'fit-content'
+                }}>                  <Typography variant="subtitle2" gutterBottom sx={{ color: 'hsl(222.2, 47.4%, 11.2%)', fontWeight: 'bold' }}> {/* --primary */}
+                    ✨ Final Prompt Info:
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontSize: '0.85rem', color: 'hsl(215.4, 16.3%, 46.9%)', mb: 2 }}> {/* --muted-foreground */}
+                    <strong>Reference Images:</strong> {imageAnalyses.length}<br/>
+                    <strong>Your Angle:</strong> {prompt}<br/>
+                    <strong>Generated Images:</strong> {generatedImages.length}<br/>
+                    <strong>Status:</strong> Ready to generate
+                  </Typography>
+                  
+                  {generatedImages.length > 0 && (
+                    <Typography variant="body2" sx={{ fontSize: '0.85rem', color: 'hsl(215.4, 16.3%, 46.9%)' }}> {/* --muted-foreground */}
+                      <strong>💡 Tip:</strong> Edit the prompt above to try different variations of your image.
+                    </Typography>
+                  )}
+                </Box>
+              </Grid>
+            </Grid>
 
-            {/* Generate Button */}
-            <Button
-              variant="contained"
-              size="large"
-              fullWidth
-              onClick={handleGenerateFusion}
-              disabled={fusionLoading || referenceImages.length === 0 || !prompt.trim()}
-              startIcon={fusionLoading ? <CircularProgress size={20} /> : <AutoAwesome />}
-              sx={{ mb: 2 }}
-            >
-              {fusionLoading ? 'Generating New Angle...' : 'Generate New Angle'}
-            </Button>
-
-            {/* Progress Indicator */}
+            {/* Generation Progress */}
             {fusionLoading && (
-              <Box sx={{ mb: 2 }}>
-                <Typography variant="body2" color="primary" gutterBottom>
+              <Box sx={{ mt: 3, p: 2, bgcolor: 'hsl(210, 40%, 96.1%)', borderRadius: 1, textAlign: 'center', border: '1px solid hsl(214.3, 31.8%, 91.4%)' }}>
+                <Typography variant="body2" sx={{ color: 'hsl(222.2, 47.4%, 11.2%)', fontWeight: 'bold' }} gutterBottom>
                   {generationProgress}
                 </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Box sx={{ flex: 1, bgcolor: 'grey.200', borderRadius: 1, height: 8 }}>
-                    <Box
+                <Typography variant="caption" sx={{ color: 'hsl(215.4, 16.3%, 46.9%)' }}>
+                  Step {progressStep}/4 - Please wait while we generate your image...
+                </Typography>
+              </Box>
+            )}
+          </Paper>
+        )}
+
+        {/* Generated Images Gallery */}
+        {generatedImages.length > 0 && (
+          <Paper sx={{ 
+            p: 3, 
+            mb: 3, 
+            bgcolor: 'hsl(0, 0%, 100%)', // --card
+            border: '2px solid hsl(214.3, 31.8%, 91.4%)', // --border
+            borderRadius: 2
+          }}>
+            <Typography variant="h6" gutterBottom sx={{ 
+              color: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+              fontWeight: 'bold',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1
+            }}>
+              🎨 Generated Images ({generatedImages.length})
+            </Typography>
+            
+            <Grid container spacing={3}>
+              {generatedImages.map((imageObj, index) => (
+                <Grid item xs={12} md={6} lg={4} key={imageObj.id}>
+                  <Card sx={{ 
+                    borderRadius: 2,
+                    border: currentGeneratedImage?.id === imageObj.id ? '2px solid hsl(222.2, 47.4%, 11.2%)' : '1px solid hsl(214.3, 31.8%, 91.4%)', // --primary : --border
+                    bgcolor: 'hsl(0, 0%, 100%)', // --card
+                    transition: 'all 0.2s ease-in-out',
+                    '&:hover': {
+                      borderColor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                    }
+                  }}>
+                    <CardMedia
+                      component="img"
+                      image={`data:image/png;base64,${imageObj.image}`}
+                      alt={`Generated image ${index + 1}`}
                       sx={{
-                        bgcolor: 'primary.main',
-                        height: '100%',
-                        borderRadius: 1,
-                        width: `${(progressStep / 4) * 100}%`,
-                        transition: 'width 0.3s ease'
+                        height: 200,
+                        objectFit: 'cover',
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => {
+                        setCurrentGeneratedImage(imageObj);
+                        handlePreviewImage(`data:image/png;base64,${imageObj.image}`);
                       }}
                     />
-                  </Box>
-                  <Typography variant="body2" color="text.secondary">
-                    {progressStep}/4
+                    <Box sx={{ p: 2 }}>
+                      <Typography variant="caption" sx={{ 
+                        display: 'block',
+                        color: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                        mb: 1
+                      }}>
+                        Generated: {imageObj.timestamp}
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <Button
+                          size="small"
+                          variant="contained"
+                          startIcon={<Download />}
+                          onClick={() => handleDownload(imageObj.image)}
+                          sx={{
+                            bgcolor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+                            color: 'hsl(210, 40%, 98%)', // --primary-foreground
+                            '&:hover': {
+                              bgcolor: 'hsl(222.2, 84%, 4.9%)' // --foreground (darker)
+                            }
+                          }}
+                        >
+                          Download
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => setCurrentGeneratedImage(imageObj)}
+                          sx={{
+                            borderColor: 'hsl(214.3, 31.8%, 91.4%)', // --border
+                            color: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
+                            '&:hover': {
+                              borderColor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
+                              color: 'hsl(222.2, 47.4%, 11.2%)' // --primary
+                            }
+                          }}
+                        >
+                          Select
+                        </Button>
+                      </Box>
+                    </Box>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          </Paper>
+        )}
+
+        {/* Help Dialog */}
+        <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="md" fullWidth>
+          <DialogTitle>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Help />
+              🚀 How Smart Angle Generator Works
+            </Box>
+          </DialogTitle>
+          <DialogContent>
+            <Box sx={{ pt: 1 }}>
+              <Typography variant="h6" gutterBottom color="primary">
+                📋 4-Step Smart Angle Process
+              </Typography>
+              
+              <Typography variant="body1" sx={{ mb: 3 }}>
+                Our Smart Angle Generator uses advanced AI to create new viewpoints while preserving every detail from your reference images.
+              </Typography>
+
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="h6" gutterBottom sx={{ color: 'success.main' }}>
+                  📋 Step-by-Step Workflow:
+                </Typography>
+                
+                <Box sx={{ ml: 1 }}>
+                  <Typography variant="body2" sx={{ mb: 2, display: 'flex', alignItems: 'flex-start' }}>
+                    <Box component="span" sx={{ color: 'success.main', fontWeight: 'bold', mr: 1, mt: 0.1 }}>1.</Box>
+                    <Box>
+                      <strong>Upload Reference Images:</strong> Add 1-5 high-quality images of your scene/object showing the elements you want to preserve.
+                    </Box>
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 2, display: 'flex', alignItems: 'flex-start' }}>
+                    <Box component="span" sx={{ color: 'success.main', fontWeight: 'bold', mr: 1, mt: 0.1 }}>2.</Box>
+                    <Box>
+                      <strong>AI Vision Analysis:</strong> Click "Analyze Images" - AI extracts detailed descriptions of lighting, colors, objects, background, style, and atmosphere.
+                    </Box>
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 2, display: 'flex', alignItems: 'flex-start' }}>
+                    <Box component="span" sx={{ color: 'success.main', fontWeight: 'bold', mr: 1, mt: 0.1 }}>3.</Box>
+                    <Box>
+                      <strong>Specify New Angle:</strong> Enter your desired viewpoint or perspective (e.g., "side view", "from above", "behind the object").
+                    </Box>
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 2, display: 'flex', alignItems: 'flex-start' }}>
+                    <Box component="span" sx={{ color: 'success.main', fontWeight: 'bold', mr: 1, mt: 0.1 }}>4.</Box>
+                    <Box>
+                      <strong>Smart Merging & Generation:</strong> AI intelligently combines descriptions with your request and generates your new viewpoint.
+                    </Box>
                   </Typography>
                 </Box>
-                <Typography variant="caption" color="text.secondary">
-                  {progressStep === 1 && "Preparing your reference images for analysis..."}
-                  {progressStep === 2 && "AI is analyzing your scene and generating the new angle..."}
-                  {progressStep === 3 && "Processing the final image..."}
-                  {progressStep === 4 && "Ready! Your new angle is complete."}
-                </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                  Using optimized parameters for maximum world preservation
-                </Typography>
               </Box>
-            )}
 
-            {/* Clear Button */}
-            <Button
-              variant="outlined"
-              fullWidth
-              onClick={clearAll}
-              startIcon={<Clear />}
-            >
-              Clear All
-            </Button>
-          </Paper>
-        </Grid>
-
-        {/* Right Panel - Output */}
-        <Grid item xs={12} md={6}>
-          <Paper sx={{ p: 3, height: 'fit-content' }}>
-            <Typography variant="h6" gutterBottom>
-              🖼️ Generated Image
-            </Typography>
-            
-            {generatedImage ? (
-              <Box>
-                <Card sx={{ mb: 2 }}>
-                  <CardMedia
-                    component="img"
-                    image={`data:image/png;base64,${generatedImage}`}
-                    alt="Generated fusion image"
-                    sx={{ cursor: 'pointer' }}
-                    onClick={() => handlePreviewImage(`data:image/png;base64,${generatedImage}`)}
-                  />
-                </Card>
-                <Button
-                  variant="outlined"
-                  fullWidth
-                  onClick={handleDownload}
-                  startIcon={<Download />}
-                >
-                  Download Image
-                </Button>
-              </Box>
-            ) : (
-              <Box sx={{ 
-                height: 400, 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center',
-                border: '2px dashed #ccc',
-                borderRadius: 1
-              }}>
-                <Typography variant="body1" color="text.secondary">
-                  Generated image will appear here
-                </Typography>
-              </Box>
-            )}
-          </Paper>
-        </Grid>
-      </Grid>
-
-      {/* Help Dialog */}
-      <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Help />
-            How to Use Same World, New Angle
-          </Box>
-        </DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 1 }}>
-            <Typography variant="h6" gutterBottom color="primary">
-              🎬 Simple 2-Step Process
-            </Typography>
-            
-            <Typography variant="body1" sx={{ mb: 2 }}>
-              Upload images of your scene, describe the angle you want, and get the same world from that new perspective.
-            </Typography>
-
-            <Typography variant="h6" gutterBottom>
-              📋 Step-by-Step Guide:
-            </Typography>
-            
-            <Box component="ul" sx={{ pl: 2, mb: 2 }}>
-              <li>
-                <Typography variant="body1" sx={{ mb: 1 }}>
-                  <strong>Upload Scene Images:</strong> Upload 1-5 photos of the scene/location you want to explore from different angles.
-                </Typography>
-              </li>
-              <li>
-                <Typography variant="body1" sx={{ mb: 1 }}>
-                  <strong>Describe Your Angle:</strong> Tell the AI what angle you want to see. Examples:
-                </Typography>
-                <Box component="ul" sx={{ pl: 2, mb: 1 }}>
-                  <li>"Close-up from above"</li>
-                  <li>"Show feet of the king"</li>
-                  <li>"Camera at ground level"</li>
-                  <li>"Behind the throne"</li>
-                  <li>"Low angle shot"</li>
-                  <li>"Bird's eye view"</li>
-                  <li>"From the other side"</li>
-                </Box>
-              </li>
-              <li>
-                <Typography variant="body1" sx={{ mb: 1 }}>
-                  <strong>Generate:</strong> Click the button and see your same world from the new angle.
-                </Typography>
-              </li>
-            </Box>
-
-            <Typography variant="h6" gutterBottom color="success.main">
-              ✅ What You Get:
-            </Typography>
-            
-            <Box component="ul" sx={{ pl: 2, mb: 2 }}>
-              <li>Same scene, same objects, same lighting</li>
-              <li>Same visual style and color palette</li>
-              <li>New perspective as requested</li>
-              <li>Elements not visible in your references (generated consistently)</li>
-              <li>Optimized AI parameters for maximum world preservation</li>
-            </Box>
-
-            <Typography variant="h6" gutterBottom color="warning.main">
-              💡 Pro Tips:
-            </Typography>
-            
-            <Box component="ul" sx={{ pl: 2, mb: 2 }}>
-              <li><strong>Hidden Elements:</strong> Request parts not visible in your images (e.g., "feet of the king", "back of the throne")</li>
-              <li><strong>New Perspectives:</strong> Ask for angles that reveal new elements (e.g., "from below", "behind the subject")</li>
-              <li><strong>Close-ups:</strong> Request detailed views (e.g., "close-up of the crown", "hands holding the sword")</li>
-              <li><strong>Different Heights:</strong> Change viewing height (e.g., "ground level", "bird's eye view")</li>
-              <li><strong>Multiple References:</strong> Upload 2-3 images of the same scene for better world understanding</li>
-            </Box>
-
-            <Alert severity="info" sx={{ mb: 2 }}>
-              <Typography variant="body2">
-                <strong>How it works:</strong> The AI analyzes your scene images to understand the complete visual world, then generates the same world from your requested angle - including elements not visible in your reference images. Uses optimized parameters (strength: 0.55, guidance: 13.0, steps: 90) for maximum world preservation.
+              <Typography variant="h6" gutterBottom color="success.main">
+                ✅ What You Get:
               </Typography>
-            </Alert>
-            
-            <Alert severity="success" sx={{ mb: 2 }}>
-              <Typography variant="body2">
-                <strong>Perfect for:</strong> Film pre-production, set design, storyboarding, photography planning, and visualizing scenes from different angles.
-              </Typography>
-            </Alert>
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setHelpOpen(false)}>Got it!</Button>
-        </DialogActions>
-      </Dialog>
+              
+              <Box component="ul" sx={{ pl: 2, mb: 2 }}>
+                <li>Same scene, same objects, same lighting</li>
+                <li>Same visual style and color palette</li>
+                <li>New perspective as requested</li>
+                <li>Elements not visible in your references (generated consistently)</li>
+              </Box>
 
-      {/* Image Preview Dialog */}
-      <Dialog 
-        open={previewOpen} 
-        onClose={() => setPreviewOpen(false)} 
-        maxWidth="lg" 
-        fullWidth
-      >
-        <DialogTitle>Image Preview</DialogTitle>
-        <DialogContent>
-          {previewImage && (
-            <img 
-              src={previewImage} 
-              alt="Preview" 
-              style={{ width: '100%', height: 'auto' }} 
-            />
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setPreviewOpen(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
+              <Typography variant="h6" gutterBottom color="warning.main">
+                💡 Pro Tips:
+              </Typography>
+              
+              <Box component="ul" sx={{ pl: 2 }}>
+                <li><strong>Hidden Elements:</strong> Request parts not visible in your images</li>
+                <li><strong>New Perspectives:</strong> Ask for angles that reveal new elements</li>
+                <li><strong>Close-ups:</strong> Request detailed views of specific objects</li>
+                <li><strong>Different Heights:</strong> Change viewing height ("ground level", "bird's eye view")</li>
+              </Box>
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setHelpOpen(false)}>Got it!</Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Image Preview Dialog */}
+        <Dialog 
+          open={previewOpen} 
+          onClose={() => setPreviewOpen(false)} 
+          maxWidth="lg" 
+          fullWidth
+        >
+          <DialogTitle>Image Preview</DialogTitle>
+          <DialogContent>
+            {previewImage && (
+              <img 
+                src={previewImage} 
+                alt="Preview" 
+                style={{ width: '100%', height: 'auto' }} 
+              />
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setPreviewOpen(false)}>Close</Button>
+          </DialogActions>
+        </Dialog>
+      </Container>
     </Box>
   );
 };
 
-export default ImageFusion; 
+export default ImageFusion;

@@ -1,0 +1,41 @@
+[
+  {
+    "shot_number": 1,
+    "shot_description": "Man silhouetted against the ocean, camera static",
+    "explanation": "This shot emphasizes his isolation and smallness compared to the vastness of the sea and sky, reflecting a possible feeling of insignificance or loneliness.",
+    "metadata": {
+      "camera_angle": "Wide Shot",
+      "camera_movement": "Static",
+      "framing": "Wide Shot",
+      "lighting": "Natural lighting",
+      "visual_elements": "Standard composition",
+      "emotional_impact": "neutral"
+    }
+  },
+  {
+    "shot_number": 2,
+    "shot_description": "Man's face in profile, camera slowly zooming in",
+    "explanation": "This shot draws the audience into his emotional state, inviting speculation about his thoughts and feelings without being overly intrusive.",
+    "metadata": {
+      "camera_angle": "Medium Close-up",
+      "camera_movement": "Zoom",
+      "framing": "Medium Close-up",
+      "lighting": "Natural lighting",
+      "visual_elements": "Character focus",
+      "emotional_impact": "neutral"
+    }
+  },
+  {
+    "shot_number": 3,
+    "shot_description": "Waves crashing near the man's feet, camera tilting up to include the man",
+    "explanation": "This shot connects the man to the power of the ocean and visually suggests he's grounded or trapped by his situation.",
+    "metadata": {
+      "camera_angle": "Low Angle Medium Shot",
+      "camera_movement": "Tilt",
+      "framing": "Low Angle Medium Shot",
+      "lighting": "Natural lighting",
+      "visual_elements": "Standard composition",
+      "emotional_impact": "neutral"
+    }
+  }
+]

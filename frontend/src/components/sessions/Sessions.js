@@ -24,7 +24,7 @@ import StorageIcon from '@mui/icons-material/Storage';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
 
-const Sessions = () => {
+const Sessions = ({ projectType = "shot-suggestion" }) => {
   const [sessions, setSessions] = useState([]);
   const [selectedSession, setSelectedSession] = useState(null);
   const [open, setOpen] = useState(false);
@@ -34,7 +34,7 @@ const Sessions = () => {
 
   useEffect(() => {
     fetchSessions();
-  }, []);
+  }, [projectType]);
 
   const fetchSessions = async () => {
     try {

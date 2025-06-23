@@ -15,6 +15,7 @@ import contextlib
 # Get the absolute path to the database file
 DB_FILE = os.path.join(os.path.dirname(__file__), "shots_app.db")
 SESSIONS_ROOT = os.path.join(os.path.dirname(__file__), 'user_sessions')
+PROJECT_IMAGES_ROOT = os.path.join(os.path.dirname(__file__), 'project_images')
 
 # Global connection pool
 _connection_pool = None
@@ -76,6 +77,27 @@ def base64_to_image(base64_str):
         return None
     image_data = base64.b64decode(base64_str)
     return Image.open(io.BytesIO(image_data))
+
+def migrate_add_project_type():
+    """Add project_type column to projects table if it doesn't exist"""
+    try:
+        with get_db_connection() as conn:
+            # Check if project_type column exists
+            cursor = conn.execute("PRAGMA table_info(projects)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'project_type' not in columns:
+                print("Adding project_type column to projects table...")
+                conn.execute('''
+                    ALTER TABLE projects 
+                    ADD COLUMN project_type TEXT DEFAULT 'shot-suggestion'
+                ''')
+                conn.commit()
+                print("Successfully added project_type column")
+            else:
+                print("project_type column already exists")
+    except sqlite3.Error as e:
+        print(f"Error adding project_type column: {e}")
 
 def init_db():
     """Initialize the database with required tables if they don't exist"""
@@ -185,8 +207,10 @@ def init_db():
         BEGIN
             UPDATE projects SET updated_at = CURRENT_TIMESTAMP
             WHERE id = NEW.id;
-        END
-        ''')
+        END        ''')
+        
+        # Run migration to add project_type column
+        migrate_add_project_type()
         
         # Commit all changes
         conn.commit()
@@ -238,14 +262,14 @@ def get_user_by_username(username):
         return dict(user) if user else None
 
 # Project management functions
-def create_project(user_id, name, description=""):
-    """Create a new project"""
+def create_project(user_id, name, description="", project_type="shot-suggestion"):
+    """Create a new project with support for different project types"""
     project_id = str(uuid.uuid4())
     try:
         with get_db_connection() as conn:
             conn.execute(
-                "INSERT INTO projects (id, user_id, name, description) VALUES (?, ?, ?, ?)",
-                (project_id, user_id, name, description)
+                "INSERT INTO projects (id, user_id, name, description, project_type) VALUES (?, ?, ?, ?, ?)",
+                (project_id, user_id, name, description, project_type)
             )
             conn.commit()
             return project_id
@@ -968,3 +992,140 @@ def list_project_sessions(user_id, project_id):
     except Exception as e:
         print(f"Error listing project sessions: {e}")
         return []
+
+def save_enhanced_shots_to_project(user_id, project_id, session_data, shots_data):
+    """
+    Save enhanced shots to a project with session data
+    """
+    try:
+        import uuid
+        import json
+        from datetime import datetime
+        
+        # Generate a unique session ID
+        session_id = str(uuid.uuid4())
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create session name with timestamp
+        session_name = f"session_{timestamp}_{session_id[:8]}"
+        
+        # Prepare session data
+        session_record = {
+            "id": session_id,
+            "name": session_name,
+            "user_id": user_id,
+            "project_id": project_id,
+            "input_data": session_data,
+            "shots_data": shots_data,
+            "created_at": datetime.now().isoformat(),
+            "type": "enhanced"
+        }
+        
+        # Save to database sessions table
+        conn = get_db_connection()
+        if conn:
+            try:
+                # Insert session record
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO sessions (id, user_id, name, data, created_at, project_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (session_id, user_id, session_name, json.dumps(session_record), 
+                     datetime.now().isoformat(), project_id)
+                )
+                
+                # Also save individual shots to the shots table if they don't exist
+                for i, shot in enumerate(shots_data.get('shots', []), 1):
+                    shot_id = save_shot(
+                        project_id=project_id,
+                        shot_number=i,
+                        scene_description=shot.get('scene_description', ''),
+                        shot_description=shot.get('shot_description', ''),
+                        model_name=shots_data.get('model', 'unknown'),
+                        metadata={
+                            "session_id": session_id,
+                            "enhanced": True,
+                            "original_input": session_data
+                        },
+                        user_input=session_data.get('subject', '')
+                    )
+                
+                conn.commit()
+                print(f"Database: Enhanced session saved successfully: {session_id}")
+                return session_record
+                
+            except sqlite3.Error as e:
+                print(f"Database: Error saving enhanced session: {str(e)}")
+                conn.rollback()
+                return None
+            finally:
+                close_db_connection()
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error in save_enhanced_shots_to_project: {str(e)}")
+        return None
+
+def save_shot_image_to_project(user_id, project_id, session_id, shot_index, image_data, shot_data):
+    """
+    Save shot image to project structure
+    """
+    try:
+        import base64
+        
+        # Create project images directory structure
+        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
+        os.makedirs(project_dir, exist_ok=True)
+        
+        # Generate filename
+        filename = f"shot_{shot_index}.png"
+        file_path = os.path.join(project_dir, filename)
+        
+        # Save image data
+        if image_data:
+            # If image_data is base64, decode and save
+            if isinstance(image_data, str) and image_data.startswith('data:image'):
+                # Remove data:image/png;base64, prefix
+                base64_data = image_data.split(',')[1]
+                image_bytes = base64.b64decode(base64_data)
+                with open(file_path, 'wb') as f:
+                    f.write(image_bytes)
+            elif isinstance(image_data, bytes):
+                # Direct bytes data
+                with open(file_path, 'wb') as f:
+                    f.write(image_data)
+            else:
+                print(f"Warning: Unsupported image data type: {type(image_data)}")
+                return None
+            
+            # Create metadata file
+            metadata_path = os.path.join(project_dir, f"shot_{shot_index}_metadata.json")
+            metadata = {
+                "user_id": user_id,
+                "project_id": project_id,
+                "session_id": session_id,
+                "shot_index": shot_index,
+                "filename": filename,
+                "file_path": file_path,
+                "shot_data": shot_data,
+                "created_at": datetime.now().isoformat()
+            }
+            
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            print(f"Database: Shot image saved to project: {file_path}")
+            return {
+                "file_path": file_path,
+                "filename": filename,
+                "metadata": metadata
+            }
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error saving shot image to project: {str(e)}")
+        return None

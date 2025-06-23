@@ -17,9 +17,10 @@ from db import (    init_db, create_user, authenticate_user, get_user_by_usernam
     save_session, list_user_sessions, get_session_data, rename_session, delete_session,
     list_file_system_sessions, get_filesystem_session_data, save_shots_to_filesystem,
     get_db_connection, save_shot_version, get_shot_versions, close_db_connection, 
-    list_project_sessions, SESSIONS_ROOT
+    list_project_sessions, SESSIONS_ROOT, save_enhanced_shots_to_project, 
+    save_shot_image_to_project, PROJECT_IMAGES_ROOT
 )
-from model import gemini, generate_shot_image, generate_fusion_image, analyze_reference_images, generate_reference_style_image, generate_identity_preserving_image, generate_pose_transfer_image
+from model import gemini, generate_shot_image, generate_fusion_image, analyze_reference_images, generate_reference_style_image, generate_identity_preserving_image, generate_pose_transfer_image, generate_multi_view_fusion, extract_detailed_image_description, merge_image_descriptions_with_prompt, generate_enhanced_negative_prompt
 import json
 from dotenv import load_dotenv
 import sqlite3
@@ -109,11 +110,13 @@ class UserResponse(BaseModel):
 class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    project_type: Optional[str] = "shot-suggestion"  # "shot-suggestion" or "image-fusion"
 
 class ProjectResponse(BaseModel):
     id: str
     name: str
     description: Optional[str]
+    project_type: Optional[str]
     created_at: datetime
     updated_at: datetime
     shot_count: int
@@ -161,6 +164,17 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+def get_project_storage_path(project_id: str, project_type: str = "shot-suggestion") -> str:
+    """Get the storage path for a project based on its type"""
+    if project_type == "image-fusion":
+        base_path = os.path.join(PROJECT_IMAGES_ROOT, "fusion_projects", project_id)
+    else:  # shot-suggestion
+        base_path = os.path.join(PROJECT_IMAGES_ROOT, "shot_projects", project_id)
+    
+    # Create directory if it doesn't exist
+    os.makedirs(base_path, exist_ok=True)
+    return base_path
 
 # Configure OAuth2
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -344,7 +358,8 @@ async def create_new_project(
     project_id = create_project(
         user_id=current_user["id"],
         name=project.name,
-        description=project.description
+        description=project.description,
+        project_type=project.project_type
     )
     if not project_id:
         raise HTTPException(
@@ -530,47 +545,51 @@ async def suggest_shots(
         if project_id:
             input_data["project_id"] = project_id
             logger.info(f"Using project_id: {project_id} for session")
-        
-        # Create a response object with the right format
+          # Create a response object with the right format
         response_data = {
             "suggestions": shot_suggestions
         }
         
         try:
-            # Save shots to filesystem
-            fs_session = save_shots_to_filesystem(
-                user_id=current_user["id"],
-                session_data=input_data,
-                shots_data=shot_suggestions,  # Use the list directly here
-                project_id=project_id
-            )
-            
-            # Also save to database with a generated name
-            session_name = f"Session {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            session_data = {
-                "input": input_data,
-                "shots": shot_suggestions
-            }
-            
-            # Only save to DB if explicitly enabled
-            if os.environ.get("SAVE_SESSIONS_TO_DB", "false").lower() == "true":
-                save_session(
+            # Use enhanced project structure if project_id is provided
+            if project_id:
+                # Save to enhanced project structure
+                enhanced_session = save_enhanced_shots_to_project(
                     user_id=current_user["id"],
-                    name=session_name,
-                    data=session_data
+                    project_id=project_id,
+                    session_data=input_data,
+                    shots_data=shot_suggestions
                 )
-            
-            # Include session info in the response
-            if fs_session:
-                response_data["session_info"] = {
-                    "id": fs_session["session_id"],
-                    "folder_path": fs_session["folder_path"]
-                }
                 
-            logger.info(f"Successfully saved shots to filesystem: {fs_session}")
+                if enhanced_session:
+                    response_data["session_info"] = {
+                        "id": enhanced_session["session_id"],
+                        "folder_path": enhanced_session["session_dir"],
+                        "images_dir": enhanced_session["images_dir"],
+                        "type": "enhanced_project_session"
+                    }
+                    logger.info(f"Successfully saved shots to enhanced project structure: {enhanced_session}")
+                else:
+                    logger.error("Failed to save to enhanced project structure")
+            else:
+                # Fallback to filesystem session for non-project shots
+                fs_session = save_shots_to_filesystem(
+                    user_id=current_user["id"],
+                    session_data=input_data,
+                    shots_data=shot_suggestions,
+                    project_id=None
+                )
+                
+                if fs_session:
+                    response_data["session_info"] = {
+                        "id": fs_session["session_id"],
+                        "folder_path": fs_session["folder_path"],
+                        "type": "filesystem_session"
+                    }
+                    logger.info(f"Successfully saved shots to filesystem: {fs_session}")
         except Exception as e:
             # Log the error but continue - we still want to return the suggestions
-            logger.error(f"Error saving shots to filesystem: {str(e)}")
+            logger.error(f"Error saving shots: {str(e)}")
             
         return response_data  # Return structured response with suggestions
     except Exception as e:
@@ -676,11 +695,13 @@ async def generate_shot_image_endpoint(
     model_name: str = Form(...),
     shot_id: str = Form(None),
     session_id: str = Form(None),
+    project_id: str = Form(None),
     shot_index: str = Form(None),  # Changed from int to str to handle form data properly
     current_user: dict = Depends(get_current_user)
 ):
     try:
         logger.info(f"Generating image for shot description: '{shot_description}' with model: {model_name}")
+        logger.info(f"Session ID: {session_id}, Project ID: {project_id}, Shot Index: {shot_index}")
         
         # Generate the image
         image_data = generate_shot_image(
@@ -689,7 +710,44 @@ async def generate_shot_image_endpoint(
         )
         
         logger.info("Image generation successful")
+        
+        # Prepare response
+        response = {"image_url": image_data}
 
+        # Save image to enhanced project structure if we have the necessary info
+        if project_id and session_id and shot_index is not None:
+            try:
+                shot_idx = int(shot_index) if shot_index else None
+                
+                if shot_idx is not None:
+                    # Save image as file to project structure
+                    image_save_result = save_shot_image_to_project(
+                        user_id=current_user["id"],
+                        project_id=project_id,
+                        session_id=session_id,
+                        shot_index=shot_idx,
+                        image_data=image_data,
+                        shot_data={
+                            "description": shot_description,
+                            "model_name": model_name,
+                            "generated_at": datetime.now().isoformat()
+                        }
+                    )
+                    
+                    if image_save_result:
+                        response["saved_to_project"] = True
+                        response["image_file_path"] = image_save_result["image_path"]
+                        response["image_filename"] = image_save_result["image_filename"]
+                        logger.info(f"Image saved to project: {image_save_result['image_path']}")
+                    else:
+                        logger.error("Failed to save image to project structure")
+                        response["saved_to_project"] = False
+                        
+            except Exception as project_save_error:
+                logger.error(f"Error saving image to project: {str(project_save_error)}")
+                response["saved_to_project"] = False
+
+        # Handle legacy shot_id updates if provided
         if shot_id:
             logger.info(f"Updating existing shot {shot_id} with new image")
             # Get current shot
@@ -727,18 +785,19 @@ async def generate_shot_image_endpoint(
                 SET version_number = ?, image_url = ?
                 WHERE id = ?
                 """,
-                (version_number, image_data, shot_id)            )
+                (version_number, image_data, shot_id)
+            )
             conn.commit()
             conn.close()
             logger.info(f"Shot {shot_id} updated successfully with new image")
         
-        # Update filesystem session if session_id is provided
-        if session_id and shot_index is not None:
+        # Update legacy filesystem session if session_id is provided (fallback)
+        if session_id and shot_index is not None and not project_id:
             try:
                 # Convert shot_index to integer if it's a string
                 shot_idx = int(shot_index) if shot_index else None
                 
-                logger.info(f"Updating filesystem session {session_id} with image for shot index {shot_idx}")
+                logger.info(f"Updating legacy filesystem session {session_id} with image for shot index {shot_idx}")
                 
                 # Get the session data
                 session_data = get_filesystem_session_data(current_user["id"], session_id)
@@ -747,7 +806,8 @@ async def generate_shot_image_endpoint(
                     shots = session_data["data"]["shots"]
                     
                     # Make sure the shot index is valid
-                    if shot_idx is not None and 0 <= shot_idx < len(shots):                        # Update the shot with the image URL
+                    if shot_idx is not None and 0 <= shot_idx < len(shots):
+                        # Update the shot with the image URL
                         shots[shot_idx]["image_url"] = image_data
                         logger.info(f"Successfully added image_url to shot at index {shot_idx}")
                         
@@ -766,13 +826,13 @@ async def generate_shot_image_endpoint(
                                     with open(shots_path, 'w') as f:
                                         json.dump(shots, f, indent=2)
                                     
-                                    logger.info(f"Updated session file at {shots_path}")
+                                    logger.info(f"Updated legacy session file at {shots_path}")
                                     break
             except Exception as sess_error:
-                logger.error(f"Error updating session file: {str(sess_error)}")
+                logger.error(f"Error updating legacy session file: {str(sess_error)}")
                 # Non-critical error, don't raise HTTP exception
         
-        return {"image_url": image_data}
+        return response
         
     except HTTPException:
         raise
@@ -1350,9 +1410,9 @@ async def pose_transfer(
 async def theme_preserve(
     prompt: str = Form(...),
     files: List[UploadFile] = File(...),
-    strength: float = Form(0.55),  # Optimized for better theme preservation
-    guidance_scale: float = Form(13.0),  # Higher for better prompt following
-    num_inference_steps: int = Form(90),  # More steps for better quality
+    strength: float = Form(0.6),  # Balanced for theme preservation and prompt following
+    guidance_scale: float = Form(15.0),  # Higher for stronger theme following
+    num_inference_steps: int = Form(100),  # More steps for better quality
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -1388,22 +1448,37 @@ async def theme_preserve(
         processed_images = []
         for i, uploaded_file in enumerate(files):
             try:
-                # Validate file type
-                if not uploaded_file.content_type.startswith('image/'):
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"File {uploaded_file.filename} is not an image"
-                    )
-                
-                # Read and process image
-                image_data = await uploaded_file.read()
-                image = Image.open(BytesIO(image_data))
-                
-                # Validate image size (max 10MB)
-                if len(image_data) > 10 * 1024 * 1024:
+                # Validate file size (max 10MB)
+                if uploaded_file.size > 10 * 1024 * 1024:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Image {uploaded_file.filename} is too large (max 10MB)"
+                    )
+                
+                # Read and validate image
+                image_data = await uploaded_file.read()
+                image = Image.open(BytesIO(image_data))
+                
+                # Convert to RGB if necessary
+                if image.mode not in ("RGB", "RGBA"):
+                    image = image.convert("RGB")
+                elif image.mode == "RGBA":
+                    # Convert RGBA to RGB with white background
+                    background = Image.new("RGB", image.size, (255, 255, 255))
+                    background.paste(image, mask=image.split()[-1])
+                    image = background
+                
+                # Validate image dimensions
+                if image.width < 64 or image.height < 64:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Image {uploaded_file.filename} is too small (minimum 64x64)"
+                    )
+                
+                if image.width > 2048 or image.height > 2048:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Image {uploaded_file.filename} is too large (max 2048x2048)"
                     )
                 
                 processed_images.append(image)
@@ -1417,7 +1492,7 @@ async def theme_preserve(
                 )
         
         # Enhance prompt for better "same world, new angle" generation
-        enhanced_prompt = f"{prompt}, same world, same scene, same objects, same props, same lighting, same visual style, same color palette, same environment, same setting, only change the camera angle or viewpoint, preserve all visual elements"
+        enhanced_prompt = f"{prompt}, exact same world, exact same scene, exact same objects, exact same props, exact same lighting conditions, exact same visual style, exact same color palette, exact same environment, exact same setting, preserve all visual elements completely, only change the camera angle or viewpoint, maintain all original details"
         
         # Generate the theme-preserving image with enhanced parameters
         logger.info("Starting theme-preserving image generation...")
@@ -1614,6 +1689,458 @@ async def advanced_reference_matching(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate advanced reference matching: {str(e)}"
+        )
+
+@app.post("/api/multi-view-fusion")
+async def multi_view_fusion(
+    prompt: str = Form(...),
+    files: List[UploadFile] = File(...),
+    strength: float = Form(0.55),  # Balanced for consistency and prompt following
+    guidance_scale: float = Form(16.0),  # Strong guidance
+    num_inference_steps: int = Form(80),  # Good quality
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate new viewpoints from multiple reference images with enhanced consistency.
+    
+    Ideal for scenarios like:
+    - Car front view → car side view
+    - Building from street → building from above
+    - Object from one angle → object from another angle
+    
+    Works best with 2-4 reference images showing different angles of the same subject.
+    """
+    try:
+        logger.info(f"Multi-view fusion request from user {current_user['username']}")
+        logger.info(f"Prompt: {prompt}")
+        logger.info(f"Number of reference images: {len(files)}")
+        
+        # Validate inputs
+        if len(files) < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one reference image is required"
+            )
+        
+        if len(files) > 6:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Maximum 6 reference images allowed for multi-view fusion"
+            )
+        
+        if not prompt.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Viewpoint prompt cannot be empty"
+            )
+        
+        # Process uploaded images
+        processed_images = []
+        for i, uploaded_file in enumerate(files):
+            try:
+                # Validate file type
+                if not uploaded_file.content_type.startswith('image/'):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"File {uploaded_file.filename} is not an image"
+                    )
+                
+                # Read and process image
+                image_data = await uploaded_file.read()
+                image = Image.open(BytesIO(image_data))
+                
+                # Validate image size
+                if len(image_data) > 10 * 1024 * 1024:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Image {uploaded_file.filename} is too large (max 10MB)"
+                    )
+                
+                processed_images.append(image)
+                logger.info(f"Processed reference image {i+1}: {uploaded_file.filename}")
+                
+            except Exception as e:
+                logger.error(f"Error processing image {uploaded_file.filename}: {str(e)}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error processing image {uploaded_file.filename}: {str(e)}"
+                )
+        
+        # Generate the multi-view fusion
+        logger.info("Starting multi-view fusion generation...")
+        generated_image = generate_multi_view_fusion(
+            prompt=prompt,
+            reference_images=processed_images,
+            model_name="runwayml/stable-diffusion-v1-5",
+            strength=strength,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps
+        )
+        
+        logger.info("Multi-view fusion generation completed successfully")
+        
+        return {
+            "image": generated_image,
+            "message": "Multi-view fusion generated successfully",
+            "processing_info": {
+                "device": "cuda" if torch.cuda.is_available() else "cpu",
+                "num_reference_images": len(processed_images),
+                "strength": strength,
+                "guidance_scale": guidance_scale,
+                "num_inference_steps": num_inference_steps,
+                "optimization": "multi_view_consistency"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in multi-view fusion: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate multi-view fusion: {str(e)}"
+        )
+
+@app.post("/api/enhanced-fusion")
+async def enhanced_fusion(
+    prompt: str = Form(...),
+    files: List[UploadFile] = File(...),
+    strength: float = Form(0.55),
+    guidance_scale: float = Form(12.0),
+    num_inference_steps: int = Form(70),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Enhanced image fusion using image-to-text-to-image approach.
+    
+    This endpoint:
+    1. Extracts detailed text descriptions from reference images (like AI vision analysis)
+    2. Merges these descriptions with the user's prompt
+    3. Generates images that preserve all background, character, and theme details
+    
+    This approach significantly improves theme and character consistency compared to traditional methods.
+    """
+    try:
+        logger.info(f"Enhanced fusion request from user {current_user['username']}")
+        logger.info(f"Prompt: {prompt}")
+        logger.info(f"Number of reference images: {len(files)}")
+        
+        # Validate inputs
+        if len(files) < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one reference image is required"
+            )
+        
+        if len(files) > 8:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Maximum 8 reference images allowed for enhanced fusion"
+            )
+        
+        if not prompt.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Prompt cannot be empty"
+            )
+        
+        # Process uploaded images
+        processed_images = []
+        for i, uploaded_file in enumerate(files):
+            try:
+                # Validate file size (max 10MB)
+                if uploaded_file.size > 10 * 1024 * 1024:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Image {uploaded_file.filename} is too large (max 10MB)"
+                    )
+                
+                # Read and validate image
+                image_data = await uploaded_file.read()
+                image = Image.open(BytesIO(image_data))
+                
+                # Convert to RGB if necessary
+                if image.mode not in ("RGB", "RGBA"):
+                    image = image.convert("RGB")
+                elif image.mode == "RGBA":
+                    # Convert RGBA to RGB with white background
+                    background = Image.new("RGB", image.size, (255, 255, 255))
+                    background.paste(image, mask=image.split()[-1])
+                    image = background
+                
+                # Validate image dimensions
+                if image.width < 64 or image.height < 64:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Image {uploaded_file.filename} is too small (minimum 64x64)"
+                    )
+                
+                if image.width > 2048 or image.height > 2048:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Image {uploaded_file.filename} is too large (max 2048x2048)"
+                    )
+                
+                processed_images.append(image)
+                logger.info(f"Processed reference image {i+1}: {uploaded_file.filename}")
+                
+            except Exception as e:
+                logger.error(f"Error processing image {uploaded_file.filename}: {str(e)}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error processing image {uploaded_file.filename}: {str(e)}"
+                )
+        
+        # Generate the enhanced fusion using image-to-text-to-image approach
+        logger.info("Starting enhanced fusion generation...")
+        generated_image = generate_fusion_image(
+            prompt=prompt,
+            reference_images=processed_images,
+            model_name="runwayml/stable-diffusion-v1-5",
+            strength=strength,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps
+        )
+        
+        logger.info("Enhanced fusion generation completed successfully")
+        
+        return {
+            "image": generated_image,
+            "message": "Enhanced fusion generated successfully using image-to-text-to-image approach",
+            "processing_info": {
+                "device": "cuda" if torch.cuda.is_available() else "cpu",
+                "num_reference_images": len(processed_images),
+                "strength": strength,
+                "guidance_scale": guidance_scale,
+                "num_inference_steps": num_inference_steps,
+                "approach": "image_to_text_to_image",
+                "enhancement": "detailed_visual_analysis"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in enhanced fusion: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate enhanced fusion: {str(e)}"
+        )
+
+@app.post("/api/analyze-images")
+async def analyze_images(
+    files: List[UploadFile] = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Analyze uploaded reference images and return detailed descriptions.
+    This allows users to see what the AI "sees" in their images before generation.
+    """
+    try:
+        logger.info(f"Image analysis request from user {current_user['username']}")
+        logger.info(f"Number of images to analyze: {len(files)}")
+        
+        # Validate inputs
+        if len(files) < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one image is required for analysis"
+            )
+        
+        if len(files) > 10:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Maximum 10 images allowed for analysis"
+            )
+        
+        # Process and analyze each image
+        image_analyses = []
+        
+        for i, uploaded_file in enumerate(files):
+            try:
+                # Validate file size (max 10MB)
+                if uploaded_file.size > 10 * 1024 * 1024:
+                    image_analyses.append({
+                        "filename": uploaded_file.filename,
+                        "status": "error",
+                        "error": f"Image too large (max 10MB)",
+                        "description": None
+                    })
+                    continue
+                
+                # Read and validate image
+                image_data = await uploaded_file.read()
+                image = Image.open(BytesIO(image_data))
+                
+                # Convert to RGB if necessary
+                if image.mode not in ("RGB", "RGBA"):
+                    image = image.convert("RGB")
+                elif image.mode == "RGBA":
+                    # Convert RGBA to RGB with white background
+                    background = Image.new("RGB", image.size, (255, 255, 255))
+                    background.paste(image, mask=image.split()[-1])
+                    image = background
+                
+                # Validate image dimensions
+                if image.width < 64 or image.height < 64:
+                    image_analyses.append({
+                        "filename": uploaded_file.filename,
+                        "status": "error",
+                        "error": f"Image too small (minimum 64x64)",
+                        "description": None
+                    })
+                    continue
+                
+                if image.width > 2048 or image.height > 2048:
+                    image_analyses.append({
+                        "filename": uploaded_file.filename,
+                        "status": "error", 
+                        "error": f"Image too large (max 2048x2048)",
+                        "description": None
+                    })
+                    continue
+                
+                # Extract detailed description using AI vision
+                logger.info(f"Analyzing image {i+1}: {uploaded_file.filename}")
+                description = extract_detailed_image_description(image)
+                
+                # Also get basic technical analysis
+                basic_analysis = analyze_reference_images([image])
+                
+                image_analyses.append({
+                    "filename": uploaded_file.filename,
+                    "status": "success",
+                    "description": description,
+                    "technical_info": {
+                        "dimensions": f"{image.width}x{image.height}",
+                        "mode": image.mode,
+                        "overall_mood": basic_analysis.get("overall_mood", "balanced"),
+                        "visual_style": basic_analysis.get("visual_style", "balanced"),
+                        "lighting_conditions": basic_analysis.get("lighting_conditions", ["balanced"])
+                    },
+                    "error": None
+                })
+                
+                logger.info(f"Successfully analyzed image {i+1}: {uploaded_file.filename}")
+                
+            except Exception as e:
+                logger.error(f"Error analyzing image {uploaded_file.filename}: {str(e)}")
+                image_analyses.append({
+                    "filename": uploaded_file.filename,
+                    "status": "error",
+                    "error": f"Analysis failed: {str(e)}",
+                    "description": None
+                })
+        
+        # Count successful analyses
+        successful_analyses = len([a for a in image_analyses if a["status"] == "success"])
+        
+        logger.info(f"Image analysis completed: {successful_analyses}/{len(files)} successful")
+        
+        return {
+            "analyses": image_analyses,
+            "summary": {
+                "total_images": len(files),
+                "successful_analyses": successful_analyses,
+                "failed_analyses": len(files) - successful_analyses
+            },
+            "message": f"Analyzed {successful_analyses} out of {len(files)} images successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in image analysis: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze images: {str(e)}"
+        )
+
+@app.post("/api/preview-combined-prompt")
+async def preview_combined_prompt(
+    user_prompt: str = Form(...),
+    image_descriptions: str = Form(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Preview the combined prompt that merges user prompt with image descriptions.
+    This allows users to review and potentially modify the prompt before generation.
+    """
+    try:
+        logger.info(f"Combined prompt preview request from user {current_user['username']}")
+        
+        # Parse the JSON string of image descriptions
+        try:
+            image_descriptions_list = json.loads(image_descriptions)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid image_descriptions format"
+            )
+        
+        # Extract data from request
+        user_prompt = user_prompt.strip()
+        image_descriptions = image_descriptions_list
+        
+        # Validate inputs
+        if not user_prompt:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User prompt is required"
+            )
+        
+        if not image_descriptions or len(image_descriptions) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Image descriptions are required. Please analyze images first."
+            )
+        
+        # Filter out empty descriptions
+        valid_descriptions = [desc for desc in image_descriptions if desc and desc.strip()]
+        
+        if len(valid_descriptions) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid image descriptions found"
+            )
+        
+        # Generate combined prompt using the model function
+        combined_prompt = merge_image_descriptions_with_prompt(valid_descriptions, user_prompt)
+        
+        # Generate enhanced negative prompt
+        base_negative = "blurry, low quality, distorted, artifacts, noise, oversaturated, undersaturated, bad anatomy, deformed"
+        enhanced_negative = generate_enhanced_negative_prompt(valid_descriptions, base_negative)
+        
+        # Create breakdown for user review
+        breakdown = {
+            "original_user_prompt": user_prompt,
+            "number_of_reference_images": len(valid_descriptions),
+            "image_descriptions_summary": [
+                f"Image {i+1}: {desc[:150]}..." if len(desc) > 150 else f"Image {i+1}: {desc}"
+                for i, desc in enumerate(valid_descriptions)
+            ],
+            "combined_prompt": combined_prompt,
+            "enhanced_negative_prompt": enhanced_negative,
+            "preservation_strategy": "The combined prompt preserves visual themes, lighting, colors, and atmospheric elements from your reference images while applying your desired viewpoint change."
+        }
+        
+        logger.info(f"Successfully generated combined prompt preview for user {current_user['username']}")
+        
+        return {
+            "success": True,
+            "combined_prompt": combined_prompt,
+            "enhanced_negative_prompt": enhanced_negative,
+            "breakdown": breakdown,
+            "message": "Combined prompt generated successfully. Review and modify if needed before generation."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in combined prompt preview: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate combined prompt preview: {str(e)}"
         )
 
 # Register cleanup handler

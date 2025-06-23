@@ -1,0 +1,67 @@
+[
+  {
+    "shot_number": 1,
+    "shot_description": "High angle shot revealing the city's ruined landscape, focusing on debris and flooded areas, camera static",
+    "explanation": "Establishes the immediate scope of the disaster and its impact on the cityscape.",
+    "metadata": {
+      "camera_angle": "Devastation Wide Shot",
+      "camera_movement": "Static",
+      "framing": "Devastation Wide Shot",
+      "lighting": "Natural lighting",
+      "visual_elements": "Environmental composition",
+      "emotional_impact": "neutral"
+    }
+  },
+  {
+    "shot_number": 2,
+    "shot_description": "Shot follows a lone survivor navigating through rubble, panning with their movement, focusing on their struggle",
+    "explanation": "Highlights the human element within the devastation and their struggle to survive.",
+    "metadata": {
+      "camera_angle": "Panning Survivor Medium Shot",
+      "camera_movement": "Pan",
+      "framing": "Panning Survivor Medium Shot",
+      "lighting": "Natural lighting",
+      "visual_elements": "Dynamic movement",
+      "emotional_impact": "neutral"
+    }
+  },
+  {
+    "shot_number": 3,
+    "shot_description": "Close-up shot of a personal item (photo, toy) partially submerged in water, camera slightly shaky",
+    "explanation": "Evokes a sense of loss and personal tragedy, making the disaster more relatable.",
+    "metadata": {
+      "camera_angle": "Object Close-Up",
+      "camera_movement": "Static",
+      "framing": "Object Close-Up",
+      "lighting": "Natural lighting",
+      "visual_elements": "Lighting effects",
+      "emotional_impact": "neutral"
+    }
+  },
+  {
+    "shot_number": 4,
+    "shot_description": "Shot of a rescue worker's exhausted face, looking towards the horizon searching, camera handheld",
+    "explanation": "Captures the dedication and weariness of those involved in the rescue efforts.",
+    "metadata": {
+      "camera_angle": "Rescue Worker Eye-Level Shot",
+      "camera_movement": "Handheld",
+      "framing": "Rescue Worker Eye-Level Shot",
+      "lighting": "Natural lighting",
+      "visual_elements": "Character focus",
+      "emotional_impact": "neutral"
+    }
+  },
+  {
+    "shot_number": 5,
+    "shot_description": "Starts low on a single collapsed building, slowly rising to reveal the entire ravaged city, camera moves vertically",
+    "explanation": "Gradually reveals the full magnitude of the disaster, emphasizing the sheer scale of destruction.",
+    "metadata": {
+      "camera_angle": "Rising Crane Shot",
+      "camera_movement": "Static",
+      "framing": "Rising Crane Shot",
+      "lighting": "Natural lighting",
+      "visual_elements": "Standard composition",
+      "emotional_impact": "neutral"
+    }
+  }
+]
