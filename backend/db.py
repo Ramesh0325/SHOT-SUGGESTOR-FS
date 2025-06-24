@@ -946,7 +946,7 @@ def save_shots_to_filesystem(user_id, session_data, shots_data, project_id=None)
 def list_project_sessions(user_id, project_id):
     """Get all sessions for a specific project from the PROJECT_IMAGES_ROOT filesystem"""
     try:
-        import json
+        import json  # Ensure json is imported
         # Look in PROJECT_IMAGES_ROOT instead of SESSIONS_ROOT
         project_folder = os.path.join(PROJECT_IMAGES_ROOT, project_id)
         if not os.path.exists(project_folder):
@@ -955,7 +955,7 @@ def list_project_sessions(user_id, project_id):
         
         print(f"Looking for sessions in: {project_folder}")
         sessions = []
-          # Get all session directories in this project folder (both session_ and fusion_session_)
+        # Get all session directories in this project folder (both session_ and fusion_session_)
         for folder in os.listdir(project_folder):
             if folder.startswith('session_') or folder.startswith('fusion_session_'):
                 session_full_path = os.path.join(project_folder, folder)
