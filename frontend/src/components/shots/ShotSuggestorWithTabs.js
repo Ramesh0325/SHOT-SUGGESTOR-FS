@@ -785,14 +785,21 @@ const ShotSuggestorWithTabs = () => {
                 </Typography>
               </Box>
             ) : (
-              <Grid container spacing={3}>
-                {shots.map((shot, index) => (
-                  <Grid item xs={12} sm={6} key={index}>
+              // Custom layout: 3 shots side by side, otherwise default grid
+              shots.length === 3 ? (
+                <Box sx={{ display: 'flex', flexDirection: 'row', gap: 3, alignItems: 'stretch', width: '100%' }}>
+                  {shots.map((shot, index) => (
                     <Card 
+                      key={index}
                       sx={{ 
+                        flex: '1 1 0',
+                        minWidth: 0,
+                        maxWidth: 400,
                         height: '100%',
                         cursor: 'pointer',
                         transition: 'all 0.3s ease',
+                        display: 'flex',
+                        flexDirection: 'column',
                         '&:hover': {
                           transform: 'translateY(-4px)',
                           boxShadow: 6
@@ -800,23 +807,21 @@ const ShotSuggestorWithTabs = () => {
                       }}
                       onClick={() => handleShotClick(shot)}
                     >
-                      <CardContent>
+                      <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 2 }}>
                         <Typography variant="h6" gutterBottom color="primary">
                           Shot {index + 1}: {shot.shot_type}
                         </Typography>
                         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                           {shot.shot_description}
                         </Typography>
-                        
                         <Divider sx={{ my: 2 }} />
-                        
                         {shot.image_url ? (
                           <CardMedia
                             component="img"
                             height="200"
                             image={shot.image_url}
                             alt={`Shot ${index + 1}`}
-                            sx={{ borderRadius: 1, mb: 2 }}
+                            sx={{ borderRadius: 1, mb: 2, objectFit: 'cover', width: '100%' }}
                           />
                         ) : (
                           <Box sx={{ 
@@ -833,7 +838,6 @@ const ShotSuggestorWithTabs = () => {
                             </Typography>
                           </Box>
                         )}
-                        
                         <Button
                           fullWidth
                           variant="outlined"
@@ -849,9 +853,74 @@ const ShotSuggestorWithTabs = () => {
                         </Button>
                       </CardContent>
                     </Card>
-                  </Grid>
-                ))}
-              </Grid>
+                  ))}
+                </Box>
+              ) : (
+                <Grid container spacing={3}>
+                  {shots.map((shot, index) => (
+                    <Grid item xs={12} sm={6} key={index}>
+                      <Card 
+                        sx={{ 
+                          height: '100%',
+                          cursor: 'pointer',
+                          transition: 'all 0.3s ease',
+                          '&:hover': {
+                            transform: 'translateY(-4px)',
+                            boxShadow: 6
+                          }
+                        }}
+                        onClick={() => handleShotClick(shot)}
+                      >
+                        <CardContent>
+                          <Typography variant="h6" gutterBottom color="primary">
+                            Shot {index + 1}: {shot.shot_type}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                            {shot.shot_description}
+                          </Typography>
+                          <Divider sx={{ my: 2 }} />
+                          {shot.image_url ? (
+                            <CardMedia
+                              component="img"
+                              height="200"
+                              image={shot.image_url}
+                              alt={`Shot ${index + 1}`}
+                              sx={{ borderRadius: 1, mb: 2 }}
+                            />
+                          ) : (
+                            <Box sx={{ 
+                              height: 200, 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'center',
+                              bgcolor: 'grey.100',
+                              borderRadius: 1,
+                              mb: 2
+                            }}>
+                              <Typography variant="body2" color="text.secondary">
+                                No image generated
+                              </Typography>
+                            </Box>
+                          )}
+                          <Button
+                            fullWidth
+                            variant="outlined"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              generateImageForShot(shot, index);
+                            }}
+                            disabled={imageGenerating[index]}
+                            startIcon={imageGenerating[index] ? <CircularProgress size={16} /> : <Add />}
+                          >
+                            {imageGenerating[index] ? 'Generating...' : 
+                             shot.image_url ? 'Regenerate Image' : 'Generate Image'}
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  ))}
+                </Grid>
+              )
             )}          </Paper>
         </Grid>
       </Grid>
