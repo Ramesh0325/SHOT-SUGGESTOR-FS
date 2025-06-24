@@ -26,7 +26,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
 
-const Projects = ({ projectType = "shot-suggestion", onProjectSelect }) => {
+const Projects = ({ projectType = "shot-suggestion", onProjectSelect, hideHeader = false }) => {
   const [projects, setProjects] = useState([]);
   const [open, setOpen] = useState(false);
   const [newProject, setNewProject] = useState({ name: '', description: '', project_type: projectType });
@@ -102,103 +102,122 @@ const Projects = ({ projectType = "shot-suggestion", onProjectSelect }) => {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>      {/* Create New Project Section */}
-      <Paper sx={{ p: 3, mb: 4 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-          <AddIcon sx={{ mr: 1 }} />
-          <Typography variant="h5" component="h2">
-            Create New {projectType === 'image-fusion' ? 'Image Fusion' : 'Shot Suggestion'} Project
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      {!hideHeader && (
+        <Box sx={{ mb: 4, textAlign: 'center', minHeight: { xs: 100, md: 140 }, py: { xs: 3, md: 5 }, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <Typography variant="h3" fontWeight="bold" sx={{ mb: 1 }}>
+            {projectType === 'image-fusion' ? 'Image Fusion Studio' : 'Shot Suggestion Studio'}
+          </Typography>
+          <Typography variant="h6" sx={{ opacity: 0.92 }}>
+            {projectType === 'image-fusion'
+              ? 'Create new perspectives and blend reference images with AI-powered fusion.'
+              : 'Create professional shot suggestions with AI-powered scene analysis'}
           </Typography>
         </Box>
-        <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-          Start a new project to {projectType === 'image-fusion' ? 'blend reference images with your creative vision' : 'generate and organize your shots'}
-        </Typography>
-        <Button
-          variant="contained"
-          color="primary"
-          startIcon={<AddIcon />}
-          onClick={() => setOpen(true)}
-        >
-          Create New Project
-        </Button>
-      </Paper>      {/* Existing Projects Section */}
-      <Paper sx={{ p: 3 }}>
-        <Typography variant="h5" component="h2" gutterBottom>
-          My {projectType === 'image-fusion' ? 'Image Fusion' : 'Shot Suggestion'} Projects
-        </Typography>
-        <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-          {projects.length === 0 
-            ? `You haven't created any ${projectType === 'image-fusion' ? 'image fusion' : 'shot suggestion'} projects yet. Create your first project to get started!`
-            : `Select a project to ${projectType === 'image-fusion' ? 'start blending images' : 'view and manage its shots'}`}
-        </Typography>
-        
-        <Grid container spacing={3}>
-          {projects.map((project) => (
-            <Grid item xs={12} sm={6} md={4} key={project.id}>
-              <Card 
-                sx={{ 
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  '&:hover': {
-                    boxShadow: 6,
-                    cursor: 'pointer'
-                  }
-                }}
-              >                <CardContent 
-                  onClick={() => {
-                    if (onProjectSelect) {
-                      onProjectSelect(project);
-                    } else {
-                      // Navigate based on project type
-                      if (projectType === 'image-fusion') {
-                        navigate(`/image-fusion?projectId=${project.id}`);
-                      } else {
-                        navigate(`/shot-suggestor?projectId=${project.id}`);
-                      }
-                    }
-                  }}
-                  sx={{ flexGrow: 1, cursor: 'pointer' }}
-                >
-                  <Typography variant="h6" component="h3" gutterBottom>
-                    {project.name}
-                  </Typography>
-                  <Typography color="textSecondary" gutterBottom>
-                    {project.description || 'No description'}
-                  </Typography>
-                  <Divider sx={{ my: 1 }} />
-                  <Typography variant="body2" color="text.secondary">
-                    Created: {new Date(project.created_at).toLocaleDateString()}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Shots: {project.shot_count || 0}
-                  </Typography>
-                  {project.last_shot_date && (
-                    <Typography variant="body2" color="text.secondary">
-                      Last Shot: {new Date(project.last_shot_date).toLocaleDateString()}
-                    </Typography>
-                  )}
-                </CardContent>
-                <CardActions sx={{ justifyContent: 'flex-end', p: 1 }}>
-                  <Tooltip title="Delete Project">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        handleDeleteClick(project);
-                      }}
-                    >
-                      <DeleteIcon />
-                    </IconButton>
-                  </Tooltip>
-                </CardActions>
-              </Card>
-            </Grid>
-          ))}
+      )}
+      <Grid container spacing={3} alignItems="stretch">
+        <Grid item xs={12} md={4}>
+          <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+              <AddIcon sx={{ mr: 1 }} />
+              <Typography variant="h5" component="h2">
+                Create New {projectType === 'image-fusion' ? 'Image Fusion' : 'Shot Suggestion'} Project
+              </Typography>
+            </Box>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+              Start a new project to {projectType === 'image-fusion' ? 'blend reference images with your creative vision' : 'generate and organize your shots'}
+            </Typography>
+            <Button
+              variant="contained"
+              color="primary"
+              startIcon={<AddIcon />}
+              onClick={() => setOpen(true)}
+              fullWidth
+            >
+              Create New Project
+            </Button>
+          </Paper>
         </Grid>
-      </Paper>
+        <Grid item xs={12} md={8}>
+          <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
+            <Typography variant="h5" component="h2" gutterBottom>
+              My {projectType === 'image-fusion' ? 'Image Fusion' : 'Shot Suggestion'} Projects
+            </Typography>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+              {projects.length === 0 
+                ? `You haven't created any ${projectType === 'image-fusion' ? 'image fusion' : 'shot suggestion'} projects yet. Create your first project to get started!`
+                : `Select a project to ${projectType === 'image-fusion' ? 'start blending images' : 'view and manage its shots'}`}
+            </Typography>
+            <Grid container spacing={3}>
+              {projects.map((project) => (
+                <Grid item xs={12} sm={6} key={project.id}>
+                  <Card 
+                    sx={{ 
+                      height: '100%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      '&:hover': {
+                        boxShadow: 6,
+                        cursor: 'pointer'
+                      }
+                    }}
+                  >
+                    <CardContent 
+                      onClick={() => {
+                        if (onProjectSelect) {
+                          onProjectSelect(project);
+                        } else {
+                          // Navigate based on project type
+                          if (projectType === 'image-fusion') {
+                            navigate(`/image-fusion?projectId=${project.id}`);
+                          } else {
+                            navigate(`/shot-suggestor?projectId=${project.id}`);
+                          }
+                        }
+                      }}
+                      sx={{ flexGrow: 1, cursor: 'pointer' }}
+                    >
+                      <Typography variant="h6" component="h3" gutterBottom>
+                        {project.name}
+                      </Typography>
+                      <Typography color="textSecondary" gutterBottom>
+                        {project.description || 'No description'}
+                      </Typography>
+                      <Divider sx={{ my: 1 }} />
+                      <Typography variant="body2" color="text.secondary">
+                        Created: {new Date(project.created_at).toLocaleDateString()}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Shots: {project.shot_count || 0}
+                      </Typography>
+                      {project.last_shot_date && (
+                        <Typography variant="body2" color="text.secondary">
+                          Last Shot: {new Date(project.last_shot_date).toLocaleDateString()}
+                        </Typography>
+                      )}
+                    </CardContent>
+                    <CardActions sx={{ justifyContent: 'flex-end', p: 1 }}>
+                      <Tooltip title="Delete Project">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleDeleteClick(project);
+                          }}
+                        >
+                          <DeleteIcon />
+                        </IconButton>
+                      </Tooltip>
+                    </CardActions>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          </Paper>
+        </Grid>
+      </Grid>
 
       {/* Delete Project Confirmation Dialog */}
       <Dialog

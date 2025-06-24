@@ -32,13 +32,13 @@ const FixedDashboard = () => {
       minHeight: '100vh',
       height: '100vh',
       background: 'linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%)',
-      pt: 5, // Reduced padding for more space
+      pt: 2, // Move cards upwards
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden'
     }}>
       <Container maxWidth="xl" sx={{ py: 1, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>{/* Hero Section */}
-        <Box sx={{ textAlign: 'center', mb: 2, flexShrink: 0 }}>
+        <Box sx={{ textAlign: 'center', mb: 1, flexShrink: 0 }}>
           <Typography 
             variant="h4" 
             component="h1" 
@@ -108,19 +108,17 @@ const FixedDashboard = () => {
               />
             </Box>
           </Box>        {/* Main Features - Optimized for center alignment */}
-        <Grid container spacing={4} sx={{ 
+        <Grid container spacing={3} justifyContent="center" alignItems="center" sx={{ 
           flex: 1, 
-          justifyContent: 'center',
-          alignItems: 'center',
-          px: { xs: 2, md: 4 },
-          maxWidth: '1200px',
+          px: { xs: 0, md: 2 },
+          maxWidth: '100%',
           mx: 'auto'
         }}>
           {/* Shot Suggestion Feature */}
-          <Grid item xs={12} md={6} sx={{ display: 'flex' }}>            <Card              sx={{ 
-                  height: '220px',
-                  minHeight: '220px',
-                  maxHeight: '220px',
+          <Grid item xs={12} sm={6} md={5.5} sx={{ display: 'flex', mx: 'auto' }}>            <Card              sx={{ 
+                  minHeight: 260,
+                  height: { xs: 260, sm: 320 },
+                  maxHeight: { xs: 320, md: 340 },
                   width: '100%',
                   display: 'flex',
                   flexDirection: 'column',
@@ -176,15 +174,15 @@ const FixedDashboard = () => {
                   <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
                     <Avatar 
                       sx={{ 
-                        width: 60, 
-                        height: 60,
+                        width: { xs: 64, md: 96 }, 
+                        height: { xs: 64, md: 96 },
                         background: 'linear-gradient(135deg, #455a64 0%, #607d8b 100%)',
                         mr: 3,
                         boxShadow: 2,
                         flexShrink: 0
                       }}
                     >
-                      <CameraAlt sx={{ fontSize: 28, color: 'white' }} />
+                      <CameraAlt sx={{ fontSize: { xs: 36, md: 56 }, color: 'white' }} />
                     </Avatar>                    <Box sx={{ flex: 1, minHeight: 0 }}>
                       <Typography variant="h5" component="h2" fontWeight="bold" sx={{ mb: 1, lineHeight: 1.2 }}>
                         Shot Suggestion
@@ -217,10 +215,10 @@ const FixedDashboard = () => {
                 </CardContent>
               </Card>
           </Grid>          {/* Image Fusion Feature */}
-          <Grid item xs={12} md={6} sx={{ display: 'flex' }}>            <Card              sx={{ 
-                  height: '220px',
-                  minHeight: '220px',
-                  maxHeight: '220px',
+          <Grid item xs={12} sm={6} md={5.5} sx={{ display: 'flex', mx: 'auto' }}>            <Card              sx={{ 
+                  minHeight: 260,
+                  height: { xs: 260, sm: 320 },
+                  maxHeight: { xs: 320, md: 340 },
                   width: '100%',
                   display: 'flex',
                   flexDirection: 'column',
@@ -276,15 +274,15 @@ const FixedDashboard = () => {
                   <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
                     <Avatar 
                       sx={{ 
-                        width: 60, 
-                        height: 60,
+                        width: { xs: 64, md: 96 }, 
+                        height: { xs: 64, md: 96 },
                         background: 'linear-gradient(135deg, #78909c 0%, #90a4ae 100%)',
                         mr: 3,
                         boxShadow: 2,
                         flexShrink: 0
                       }}
                     >
-                      <PhotoLibrary sx={{ fontSize: 28, color: 'white' }} />
+                      <PhotoLibrary sx={{ fontSize: { xs: 36, md: 56 }, color: 'white' }} />
                     </Avatar>
                     <Box sx={{ flex: 1, minHeight: 0 }}>
                       <Typography variant="h5" component="h2" fontWeight="bold" sx={{ mb: 1, lineHeight: 1.2 }}>

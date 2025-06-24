@@ -17,6 +17,7 @@ import {
 } from '@mui/material';
 import axios from 'axios';
 import { useAuth } from './contexts/AuthContext';
+import DownloadIcon from '@mui/icons-material/Download';
 
 const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, handleGenerateImage }) => {
   const { sessionId } = useParams();
@@ -328,10 +329,11 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
                               justifyContent: 'center',
                               position: 'relative'
                             }}
-                          >                            <CardMedia
+                          >
+                            <CardMedia
                               component="img"
-                              sx={{ 
-                                height: '100%', 
+                              sx={{
+                                height: '100%',
                                 objectFit: 'contain',
                                 maxWidth: '100%',
                                 border: '1px solid #eee',
@@ -347,6 +349,22 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
                                 e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0yNCAyMy45OTloLTI0di0yNGgyNHYyNHptLTEtMjJoLTIydjIwaDIydi0yMHptLTEtMXYyMmgtMjB2LTIyaDIwem0tMiA2aC0xNnYxNGgxNnYtMTR6bS0xMC0yaC0zdjJoM3YtMnoiLz48L3N2Zz4=';
                               }}
                             />
+                            <Button
+                              variant="contained"
+                              startIcon={<DownloadIcon />}
+                              sx={{ position: 'absolute', bottom: 16, right: 16, zIndex: 2 }}
+                              onClick={e => {
+                                e.stopPropagation();
+                                const link = document.createElement('a');
+                                link.href = shot.image_url;
+                                link.download = `shot_${shot.num || shot.shot_number || index + 1}.png`;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                              }}
+                            >
+                              Download
+                            </Button>
                           </Box>
                         ) : shot.isGeneratingImage ? (
                           <Box 

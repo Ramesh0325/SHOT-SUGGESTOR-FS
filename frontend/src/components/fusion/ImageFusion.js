@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -31,6 +31,7 @@ import {
   CameraAlt
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
+import axios from 'axios';
 
 const ImageFusion = ({ projectId }) => {
   const auth = useAuth();
@@ -56,6 +57,63 @@ const ImageFusion = ({ projectId }) => {
   const [generationProgress, setGenerationProgress] = useState('');
   const [progressStep, setProgressStep] = useState(0);
   const fileInputRef = useRef();
+  const [fusionSession, setFusionSession] = useState(null);
+
+  // Load previous fusion session when component mounts
+  useEffect(() => {
+    if (projectId && token) {
+      loadLastFusionSession();
+    }
+  }, [projectId, token]);
+
+  const loadLastFusionSession = async () => {
+    try {
+      const response = await fetch(`http://localhost:8000/projects/${projectId}/sessions`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (response.ok) {
+        const sessions = await response.json();
+        
+        // Find the most recent fusion session
+        const fusionSessions = sessions.filter(session => 
+          session.type?.includes('fusion') || session.name?.includes('fusion')
+        );
+        
+        if (fusionSessions.length > 0) {
+          // Sort by created_at and get the most recent
+          fusionSessions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+          const lastSession = fusionSessions[0];
+          
+          // Load the session details
+          const detailsResponse = await fetch(
+            `http://localhost:8000/projects/${projectId}/sessions/${lastSession.id}/details`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          
+          if (detailsResponse.ok) {
+            const sessionData = await detailsResponse.json();
+            
+            // Restore fusion session state
+            if (sessionData.input_data?.prompt) {
+              setPrompt(sessionData.input_data.prompt);
+            }
+            if (sessionData.fusion_data?.generated_images) {
+              setGeneratedImages(sessionData.fusion_data.generated_images);
+              if (sessionData.fusion_data.generated_images.length > 0) {
+                setCurrentGeneratedImage(sessionData.fusion_data.generated_images[0]);
+              }
+            }
+            
+            console.log('Loaded previous fusion session:', sessionData);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading last fusion session:', error);
+      // Don't show error to user as this is a background operation
+    }
+  };
 
   const handleImageUpload = (event) => {
     const files = Array.from(event.target.files);
@@ -101,6 +159,11 @@ const ImageFusion = ({ projectId }) => {
   };
 
   const handleAnalyzeImages = async () => {
+    if (!fusionSession) {
+      const session = await startFusionSession();
+      if (!session) return;
+    }
+
     if (referenceImages.length === 0) {
       setError('Please upload at least one reference image');
       return;
@@ -347,6 +410,56 @@ const ImageFusion = ({ projectId }) => {
       newExpanded.add(index);
     }
     setExpandedDescriptions(newExpanded);
+  };
+
+  // Function to start a new fusion session
+  const startFusionSession = async () => {
+    if (!projectId) return;
+    try {
+      const token = auth?.token;
+      const response = await axios.post(
+        `http://localhost:8000/projects/${projectId}/fusion/start-session`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setFusionSession(response.data);
+      return response.data;
+    } catch (error) {
+      setError('Failed to start fusion session');
+      return null;
+    }
+  };
+
+  // When user uploads images or starts the process, start a session if not already started
+  const handleUploadImages = async (files) => {
+    if (!fusionSession) {
+      const session = await startFusionSession();
+      if (!session) return;
+    }
+    // ... existing logic to handle image upload ...
+  };
+
+  // Add a function to delete a session
+  const handleDeleteSession = async () => {
+    if (!fusionSession) return;
+    try {
+      const token = auth?.token;
+      const sessionName = fusionSession.session_name;
+      await axios.delete(`http://localhost:8000/projects/${projectId}/sessions/${sessionName}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setFusionSession(null);
+      setReferenceImages([]);
+      setImageAnalyses([]);
+      setAnalysisComplete(false);
+      setPrompt('');
+      setFinalPrompt('');
+      setGeneratedImages([]);
+      setCurrentGeneratedImage(null);
+      setError('Session deleted.');
+    } catch (error) {
+      setError('Failed to delete session');
+    }
   };
 
   // Safety check to prevent rendering before auth is ready

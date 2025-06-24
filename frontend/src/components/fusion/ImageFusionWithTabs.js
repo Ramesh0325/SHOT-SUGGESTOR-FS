@@ -3,8 +3,6 @@ import {
   Container,
   Typography,
   Box,
-  Tabs,
-  Tab,
   AppBar,
   Toolbar,
   IconButton,
@@ -14,17 +12,14 @@ import {
 import {
   PhotoLibrary,
   FolderOpen,
-  History,
   ArrowBack
 } from '@mui/icons-material';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import Projects from '../projects/Projects';
-import Sessions from '../sessions/SessionsSimple';
 import ImageFusion from './ImageFusion';
 
 const ImageFusionWithTabs = () => {
-  const [currentTab, setCurrentTab] = useState(0);
   const [selectedProject, setSelectedProject] = useState(null);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -36,47 +31,26 @@ const ImageFusionWithTabs = () => {
     if (projectId) {
       // If project ID is provided, skip to the fusion interface
       setSelectedProject({ id: projectId });
-      setCurrentTab(0); // Go to fusion tab
     }
-  }, [searchParams]);
-
-  const handleTabChange = (event, newValue) => {
-    setCurrentTab(newValue);
-  };
-
-  const handleProjectSelect = (project) => {
+  }, [searchParams]);  const handleProjectSelect = (project) => {
     setSelectedProject(project);
-    setCurrentTab(0); // Switch to the Image Fusion tab when a project is selected
   };
 
   const handleBackToProjects = () => {
     setSelectedProject(null);
-    setCurrentTab(0); // Go back to projects tab
     // Remove projectId from URL if it exists
     navigate('/image-fusion', { replace: true });
   };
-
   const renderTabContent = () => {
     if (!selectedProject) {
       // Show project management when no project is selected
-      switch (currentTab) {
-        case 0:
-          return (
-            <Projects 
-              projectType="image-fusion" 
-              onProjectSelect={handleProjectSelect}
-            />
-          );
-        case 1:
-          return <Sessions projectType="image-fusion" />;
-        default:
-          return (
-            <Projects 
-              projectType="image-fusion" 
-              onProjectSelect={handleProjectSelect}
-            />
-          );
-      }
+      return (
+        <Projects 
+          projectType="image-fusion" 
+          onProjectSelect={handleProjectSelect}
+          hideHeader={true}
+        />
+      );
     } else {
       // Show full-screen Image Fusion interface when project is selected
       return (
@@ -125,29 +99,34 @@ const ImageFusionWithTabs = () => {
           </Box>
         </Toolbar>
       </AppBar>
-
-      {/* Tabs (only show when no project is selected) */}
+      {/* Custom Studio Header for Project Selection */}
       {!selectedProject && (
-        <AppBar position="static" color="transparent" elevation={0}>
-          <Tabs
-            value={currentTab}
-            onChange={handleTabChange}
-            sx={{ borderBottom: 1, borderColor: 'divider' }}
-          >
-            <Tab
-              icon={<FolderOpen />}
-              label="Projects"
-              iconPosition="start"
-            />
-            <Tab
-              icon={<History />}
-              label="Sessions"
-              iconPosition="start"
-            />
-          </Tabs>
-        </AppBar>
+        <Box
+          sx={{
+            width: '100vw',
+            minHeight: { xs: 100, md: 140 },
+            background: 'white',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            py: { xs: 3, md: 5 },
+            px: 2,
+            textAlign: 'center',
+            boxShadow: 1,
+            borderBottomLeftRadius: { xs: 16, md: 32 },
+            borderBottomRightRadius: { xs: 16, md: 32 },
+            mb: 4
+          }}
+        >
+          <Typography variant="h3" fontWeight="bold" sx={{ mb: 1, fontSize: { xs: 28, md: 40 } }}>
+            Image Fusion Studio
+          </Typography>
+          <Typography variant="h6" sx={{ opacity: 0.92, fontSize: { xs: 16, md: 22 } }}>
+            Create new perspectives and blend reference images with AI-powered fusion.
+          </Typography>
+        </Box>
       )}
-
       {/* Content */}
       <Box sx={{ flex: 1, overflow: 'hidden' }}>
         {renderTabContent()}

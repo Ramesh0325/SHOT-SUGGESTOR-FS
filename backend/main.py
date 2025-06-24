@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, status
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, status, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -29,6 +29,8 @@ import contextlib
 from PIL import Image
 from io import BytesIO
 import torch
+import uuid
+from shutil import rmtree
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -2413,3 +2415,86 @@ async def get_session_image(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to serve image: {str(e)}"
         )
+
+@app.post("/projects/{project_id}/fusion/start-session")
+async def start_fusion_session(
+    project_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Create a new session subfolder for image fusion in the selected project.
+    Returns the session ID and folder path.
+    """
+    try:
+        import uuid
+        from datetime import datetime
+        import os
+        from db import PROJECT_IMAGES_ROOT
+
+        # Check project ownership
+        project = get_project(project_id)
+        if not project or project["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=404, detail="Project not found or not owned by user.")
+
+        # Generate session ID and folder
+        session_id = str(uuid.uuid4())
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_name = f"fusion_session_{timestamp}_{session_id[:8]}"
+        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
+        session_dir = os.path.join(project_dir, session_name)
+        images_dir = os.path.join(session_dir, "images")
+        os.makedirs(images_dir, exist_ok=True)
+
+        # Optionally, save a minimal input.json to mark the session start
+        input_data = {
+            "type": "image_fusion",
+            "created_at": datetime.now().isoformat(),
+            "session_id": session_id,
+            "user_id": current_user["id"],
+            "project_id": project_id
+        }
+        input_file_path = os.path.join(session_dir, "input.json")
+        import json
+        with open(input_file_path, 'w') as f:
+            json.dump(input_data, f, indent=2)
+
+        return {
+            "session_id": session_id,
+            "session_name": session_name,
+            "session_dir": session_dir,
+            "images_dir": images_dir,
+            "input_file": input_file_path
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to start fusion session: {str(e)}")
+
+@app.delete("/projects/{project_id}/sessions/{session_name}")
+async def delete_project_session(
+    project_id: str,
+    session_name: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Delete a session subfolder (for shot suggestion or fusion) from a project.
+    """
+    try:
+        from db import PROJECT_IMAGES_ROOT
+        import os
+        # Check project ownership
+        project = get_project(project_id)
+        if not project or project["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=404, detail="Project not found or not owned by user.")
+        # Find the session folder
+        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
+        session_dir = os.path.join(project_dir, session_name)
+        if not os.path.exists(session_dir):
+            raise HTTPException(status_code=404, detail="Session folder not found.")
+        # Delete the session folder and all its contents
+        rmtree(session_dir)
+        return {"success": True, "message": f"Session '{session_name}' deleted."}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")

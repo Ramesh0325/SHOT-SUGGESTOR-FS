@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Container,
@@ -23,12 +23,12 @@ import {
   Tabs,
   Tab,
   IconButton,
-  Chip
+  Chip,
+  Tooltip
 } from '@mui/material';
 import {
   CameraAlt,
   FolderOpen,
-  History,
   ArrowBack,
   Add,
   PhotoCamera,
@@ -37,7 +37,6 @@ import {
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
 import Projects from '../projects/Projects';
-import Sessions from '../sessions/Sessions';
 
 const ShotSuggestorWithTabs = () => {
   // URL and navigation
@@ -45,14 +44,13 @@ const ShotSuggestorWithTabs = () => {
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(location.search);
   const projectIdFromUrl = urlParams.get('projectId');
-
   // State management
   const [currentTab, setCurrentTab] = useState(projectIdFromUrl ? 1 : 0); // Start on Shot Generator if project selected
   const [selectedProject, setSelectedProject] = useState(null);
   const [sceneDescription, setSceneDescription] = useState('');
-  const [numShots, setNumShots] = useState(3);
-  const [shots, setShots] = useState([]);
+  const [numShots, setNumShots] = useState(3);  const [shots, setShots] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionLoading, setSessionLoading] = useState(false);
   const [imageGenerating, setImageGenerating] = useState({});
   const [sessionInfo, setSessionInfo] = useState(null);
   const [selectedShot, setSelectedShot] = useState(null);
@@ -60,42 +58,148 @@ const ShotSuggestorWithTabs = () => {
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarSeverity, setSnackbarSeverity] = useState('success');
-  const { user } = useAuth();
-
-  // Load project from URL parameter
+  const { user } = useAuth();  // Load project from URL parameter
   useEffect(() => {
-    if (projectIdFromUrl) {
+    if (projectIdFromUrl && user) {
+      console.log('Loading project from URL with authenticated user:', projectIdFromUrl);
       loadProjectFromId(projectIdFromUrl);
+    } else if (projectIdFromUrl && !user) {
+      console.log('Project ID found in URL but user not authenticated yet, waiting...');
     }
-  }, [projectIdFromUrl]);
+  }, [projectIdFromUrl, user]);
 
+  // Debug useEffect to monitor when shots are loaded
+  useEffect(() => {
+    console.log('Shots state changed:', shots.length, 'shots loaded');
+    if (shots.length > 0) {
+      console.log('Shots loaded successfully:', shots);
+    }
+  }, [shots]);
+
+  // Load last session shots when project is selected
+  useEffect(() => {
+    if (selectedProject) {
+      loadLastSessionShots();
+    }
+  }, [selectedProject]);  const loadLastSessionShots = async () => {
+    if (!selectedProject) return;
+
+    console.log('Loading last session shots for project:', selectedProject.id);
+    setSessionLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.log('No auth token found, cannot load previous shots');
+        setSessionLoading(false);
+        return;
+      }
+      
+      console.log('Fetching sessions for project:', selectedProject.id);
+      const response = await axios.get(`http://localhost:8000/projects/${selectedProject.id}/sessions`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      console.log('Sessions response:', response.data); // Debug log
+      
+      // Find the most recent shot suggestion session
+      const shotSessions = response.data.filter(session => 
+        !session.type?.includes('fusion') && !session.name?.includes('fusion')
+      );
+      
+      console.log('Shot sessions found:', shotSessions); // Debug log
+      
+      if (shotSessions.length > 0) {
+        // Sort by created_at and get the most recent
+        shotSessions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        const lastSession = shotSessions[0];
+        
+        console.log('Loading session:', lastSession); // Debug log
+        
+        // Load the session details
+        const detailsResponse = await axios.get(
+          `http://localhost:8000/projects/${selectedProject.id}/sessions/${lastSession.id}/details`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        
+        console.log('Session details:', detailsResponse.data); // Debug log
+        
+        if (detailsResponse.data.shots_data?.shots) {
+          setShots(detailsResponse.data.shots_data.shots);
+          setSessionInfo({ id: lastSession.id, ...detailsResponse.data.session });
+          if (detailsResponse.data.input_data?.scene_description) {
+            setSceneDescription(detailsResponse.data.input_data.scene_description);
+          }
+          console.log('Successfully loaded previous shots:', detailsResponse.data.shots_data.shots.length);
+          // Only show notification if there are actual shots loaded
+          if (detailsResponse.data.shots_data.shots.length > 0) {
+            showSnackbar(`Loaded ${detailsResponse.data.shots_data.shots.length} previous shots from project`, 'info');
+          }
+        }
+      } else {
+        console.log('No shot suggestion sessions found for this project'); // Debug log
+        // Reset state when no previous sessions found
+        setShots([]);
+        setSessionInfo(null);
+        setSceneDescription('');
+      }    } catch (error) {
+      console.error('Error loading last session shots:', error);
+      if (error.response?.status === 401) {
+        console.log('Authentication failed - user may need to log in again');
+        showSnackbar('Please log in to access your previous work', 'warning');
+      } else if (error.response?.status === 404) {
+        console.log('Project or sessions not found');
+      } else {
+        console.log('Network or server error loading previous shots');
+      }
+      // Reset state on error
+      setShots([]);
+      setSessionInfo(null);
+      setSceneDescription('');
+    } finally {
+      setSessionLoading(false);
+    }
+  };
   const loadProjectFromId = async (projectId) => {
     try {
       const token = localStorage.getItem('token');
+      if (!token) {
+        console.log('Cannot load project - no authentication token');
+        showSnackbar('Please log in to access your project', 'warning');
+        return;
+      }
+      
+      console.log('Loading project with ID:', projectId);
       const response = await axios.get(`http://localhost:8000/projects/${projectId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      console.log('Project loaded successfully:', response.data);
       setSelectedProject(response.data);
       setCurrentTab(1); // Switch to shot generator tab
     } catch (error) {
       console.error('Error loading project:', error);
-      showSnackbar('Error loading project', 'error');
+      if (error.response?.status === 401) {
+        showSnackbar('Please log in to access your project', 'warning');
+      } else if (error.response?.status === 404) {
+        showSnackbar('Project not found', 'error');
+      } else {
+        showSnackbar('Error loading project', 'error');
+      }
     }
   };
-
   const handleProjectSelect = (project) => {
+    console.log('Project selected:', project.name, 'ID:', project.id);
     setSelectedProject(project);
     setCurrentTab(1); // Switch to shot generator tab
     // Update URL without page reload
     window.history.pushState({}, '', `/shot-suggestor?projectId=${project.id}`);
-  };
-
-  const handleBackToProjects = () => {
+  };const handleBackToProjects = () => {
+    console.log('Navigating back to projects - resetting state');
     setSelectedProject(null);
     setCurrentTab(0);
     setShots([]);
     setSceneDescription('');
     setSessionInfo(null);
+    setSessionLoading(false);
     // Update URL without page reload
     window.history.pushState({}, '', '/shot-suggestor');
   };
@@ -213,34 +317,6 @@ const ShotSuggestorWithTabs = () => {
   const handleShotClick = (shot) => {
     setSelectedShot(shot);
     setOpen(true);  };
-  const renderProjectHeader = () => (
-    selectedProject && (
-      <Paper sx={{ p: 2, mb: 3, background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <IconButton onClick={handleBackToProjects} sx={{ color: 'primary.main' }}>
-              <ArrowBack />
-            </IconButton>
-            <Box>
-              <Typography variant="h5" fontWeight="bold" color="primary.main">
-                {selectedProject.name}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {selectedProject.description || 'No description'}
-              </Typography>
-            </Box>
-          </Box>
-          <Chip 
-            label="Shot Suggestion Project" 
-            color="primary" 
-            icon={<CameraAlt />}
-            variant="outlined"
-          />
-        </Box>
-      </Paper>
-    )
-  );
-
   const renderTabContent = () => {
     switch (currentTab) {
       case 0:
@@ -248,26 +324,16 @@ const ShotSuggestorWithTabs = () => {
           <Projects 
             projectType="shot-suggestion" 
             onProjectSelect={handleProjectSelect}
+            hideHeader={true}
           />
         );
       case 1:
         return renderShotGenerator();
-      case 2:        return (
-          <Container maxWidth="xl" sx={{ py: 3, minHeight: '100vh' }}>
-            {renderProjectHeader()}
-            <Sessions 
-              projectType="shot-suggestion" 
-              projectId={selectedProject?.id}
-            />
-          </Container>
-        );
       default:
         return null;
     }
-  };  const renderShotGenerator = () => (
+  };const renderShotGenerator = () => (
     <Container maxWidth="xl" sx={{ py: 3, minHeight: '100vh' }}>
-      {renderProjectHeader()}
-
       <Grid container spacing={3}>
         {/* Left Panel - Shot Configuration */}
         <Grid item xs={12} lg={4}>
@@ -336,8 +402,24 @@ const ShotSuggestorWithTabs = () => {
                 <Chip label={`${shots.length} shots`} size="small" color="primary" />
               )}
             </Typography>
-            
-            {shots.length === 0 ? (
+              {sessionLoading ? (
+              <Box sx={{ 
+                display: 'flex', 
+                flexDirection: 'column', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                minHeight: '50vh',
+                textAlign: 'center' 
+              }}>
+                <CircularProgress size={60} sx={{ mb: 2 }} />
+                <Typography variant="h6" color="text.secondary" gutterBottom>
+                  Loading previous work...
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Restoring your shots from this project
+                </Typography>
+              </Box>
+            ) : shots.length === 0 ? (
               <Box sx={{ 
                 display: 'flex', 
                 flexDirection: 'column', 
@@ -428,28 +510,36 @@ const ShotSuggestorWithTabs = () => {
     </Container>
   );
   return (
-    <Box sx={{ 
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
-      pt: selectedProject ? 0 : 8  // No top padding when in project view
-    }}>
+    <Container maxWidth="xl" disableGutters sx={{ p: 0, m: 0 }}>
+      <Box
+        sx={{
+          width: '100vw',
+          minHeight: { xs: 100, md: 140 },
+          background: 'white',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          py: { xs: 3, md: 5 },
+          px: 2,
+          textAlign: 'center',
+          boxShadow: 1,
+          borderBottomLeftRadius: { xs: 16, md: 32 },
+          borderBottomRightRadius: { xs: 16, md: 32 },
+          mb: 4
+        }}
+      >
+        <Typography variant="h3" fontWeight="bold" sx={{ mb: 1, fontSize: { xs: 28, md: 40 } }}>
+          Shot Suggestion Studio
+        </Typography>
+        <Typography variant="h6" sx={{ opacity: 0.92, fontSize: { xs: 16, md: 22 } }}>
+          Create professional shot suggestions with AI-powered scene analysis
+        </Typography>
+      </Box>
       {!selectedProject ? (
         // Show tabs header only when no project is selected
         <Container maxWidth="xl" sx={{ py: 3 }}>
           <Paper sx={{ mb: 3, overflow: 'hidden' }}>
-            <Box sx={{ 
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              color: 'white',
-              p: 3
-            }}>
-              <Typography variant="h4" fontWeight="bold" gutterBottom>
-                Shot Suggestion Studio
-              </Typography>
-              <Typography variant="subtitle1" sx={{ opacity: 0.9 }}>
-                Create professional shot suggestions with AI-powered scene analysis
-              </Typography>
-            </Box>
-            
             <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
               <Tabs value={currentTab} onChange={handleTabChange} aria-label="shot suggestor tabs">
                 <Tab 
@@ -458,19 +548,17 @@ const ShotSuggestorWithTabs = () => {
                   iconPosition="start"
                   sx={{ textTransform: 'none', fontWeight: 'bold' }}
                 />
-                <Tab 
-                  icon={<CameraAlt />} 
-                  label="Shot Generator" 
-                  iconPosition="start"
-                  sx={{ textTransform: 'none', fontWeight: 'bold' }}
-                  disabled={!selectedProject}
-                />
-                <Tab 
-                  icon={<History />} 
-                  label="Sessions" 
-                  iconPosition="start"
-                  sx={{ textTransform: 'none', fontWeight: 'bold' }}
-                />
+                <Tooltip title={selectedProject ? '' : 'Enter into a project to use the Shot Suggestor'} arrow disableHoverListener={!!selectedProject}>
+                  <span>
+                    <Tab 
+                      icon={<CameraAlt />} 
+                      label="Shot Generator" 
+                      iconPosition="start"
+                      sx={{ textTransform: 'none', fontWeight: 'bold' }}
+                      disabled={!selectedProject}
+                    />
+                  </span>
+                </Tooltip>
               </Tabs>
             </Box>
           </Paper>
@@ -531,7 +619,7 @@ const ShotSuggestorWithTabs = () => {
             {snackbarMessage}
           </Alert>
         </Snackbar>
-    </Box>
+    </Container>
   );
 };
 
