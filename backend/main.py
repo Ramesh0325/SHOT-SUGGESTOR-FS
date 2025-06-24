@@ -1192,6 +1192,70 @@ async def list_project_sessions_api(
     
     return sorted(sessions, key=lambda x: x.get('created_at', ''), reverse=True)
 
+@app.get("/projects/{project_id}/sessions/{session_id}/details")
+async def get_project_session_details(
+    project_id: str,
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get detailed session data from project folder including input/output files
+    """
+    import os
+    try:
+        from db import PROJECT_IMAGES_ROOT, get_session_by_id
+        logger.info(f"Getting session details for project {project_id}, session {session_id}")
+        # Try to find session folder
+        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
+        session_folder = os.path.join(project_dir, session_id)
+        if not os.path.exists(session_folder):
+            return JSONResponse(status_code=404, content={"detail": "Session folder not found"})
+        # Load input.json
+        input_data = None
+        input_file = os.path.join(session_folder, "input.json")
+        if os.path.exists(input_file):
+            with open(input_file, "r", encoding="utf-8") as f:
+                input_data = json.load(f)
+        # Load shots.json (for shot suggestion sessions)
+        shots_data = None
+        shots_file = os.path.join(session_folder, "shots.json")
+        if os.path.exists(shots_file):
+            with open(shots_file, "r", encoding="utf-8") as f:
+                shots_data = json.load(f)
+        # Load output.json
+        output_data = None
+        output_file = os.path.join(session_folder, "output.json")
+        if os.path.exists(output_file):
+            with open(output_file, "r", encoding="utf-8") as f:
+                output_data = json.load(f)
+        # List generated images
+        images_dir = os.path.join(session_folder, "images")
+        image_files = []
+        if os.path.exists(images_dir):
+            for fname in os.listdir(images_dir):
+                if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                    image_files.append({
+                        "filename": fname,
+                        "url": f"/projects/{project_id}/sessions/{session_id}/images/{fname}"
+                    })
+        return {
+            "session": {"id": session_id, "project_id": project_id},
+            "session_folder": session_folder,
+            "input_data": input_data,
+            "shots_data": shots_data,
+            "output_data": output_data,
+            "image_files": image_files,
+            "file_summary": {
+                "has_input": input_data is not None,
+                "has_shots": shots_data is not None,
+                "has_output": output_data is not None,
+                "image_count": len(image_files)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error loading session details: {str(e)}")
+        return JSONResponse(status_code=500, content={"detail": f"Failed to load session details: {str(e)}"})
+
 @app.post("/fusion/generate-image")
 async def fusion_generate_image_with_final_prompt(
     final_prompt: str = Form(...),
@@ -1246,7 +1310,6 @@ async def fusion_generate_image_with_final_prompt(
             "prompt_used": final_prompt,
             "message": "Image generated successfully using final prompt"
         }
-        
         # Add save information if data was saved
         if saved_data:
             response_data["saved_to_project"] = True
@@ -1255,10 +1318,8 @@ async def fusion_generate_image_with_final_prompt(
                 "session_dir": saved_data["session_dir"],
                 "images_dir": saved_data["images_dir"]
             }
-            # Add image URL for frontend display
             if saved_data.get("image_filename"):
                 response_data["image_url"] = f"http://localhost:8000/projects/{project_id}/sessions/{saved_data['session_name']}/images/{saved_data['image_filename']}"
-        
         return response_data
         
     except Exception as e:
@@ -1317,19 +1378,6 @@ async def generate_fusion_image_endpoint(
                 detail="Prompt cannot be empty"
             )
         
-        # Validate strength and guidance_scale
-        if not 0.0 <= strength <= 1.0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Strength must be between 0.0 and 1.0"
-            )
-        
-        if not 1.0 <= guidance_scale <= 20.0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Guidance scale must be between 1.0 and 20.0"
-            )
-        
         # Process uploaded images
         processed_images = []
         for i, uploaded_file in enumerate(reference_images):
@@ -1345,7 +1393,7 @@ async def generate_fusion_image_endpoint(
                 image_data = await uploaded_file.read()
                 image = Image.open(BytesIO(image_data))
                 
-                # Validate image size (max 10MB)
+                # Validate image size
                 if len(image_data) > 10 * 1024 * 1024:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -1407,7 +1455,7 @@ async def generate_fusion_image_endpoint(
         generated_image = generate_fusion_image(
             prompt=enhanced_prompt,
             reference_images=processed_images,
-            model_name=model_name,
+            model_name="runwayml/stable-diffusion-v1-5",
             strength=strength,
             guidance_scale=guidance_scale,
             num_inference_steps=num_inference_steps
@@ -1551,7 +1599,7 @@ async def theme_preserve(
         if len(files) > 10:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Maximum 10 reference images allowed"
+                detail="Maximum 10 reference images allowed for theme preservation"
             )
         
         if not prompt.strip():
@@ -1598,7 +1646,7 @@ async def theme_preserve(
                     )
                 
                 processed_images.append(image)
-                logger.info(f"Processed image {i+1}: {uploaded_file.filename}")
+                logger.info(f"Processed reference image {i+1}: {uploaded_file.filename}")
                 
             except Exception as e:
                 logger.error(f"Error processing image {uploaded_file.filename}: {str(e)}")
@@ -2046,32 +2094,31 @@ async def enhanced_fusion(
 @app.post("/api/analyze-images")
 async def analyze_images(
     files: List[UploadFile] = File(...),
+    project_id: str = Form(None),
+    session_id: str = Form(None),
     current_user: dict = Depends(get_current_user)
 ):
     """
     Analyze uploaded reference images and return detailed descriptions.
-    This allows users to see what the AI "sees" in their images before generation.
+    Also stores reference image metadata and analysis in input.json if project_id and session_id are provided.
     """
     try:
         logger.info(f"Image analysis request from user {current_user['username']}")
         logger.info(f"Number of images to analyze: {len(files)}")
-        
         # Validate inputs
         if len(files) < 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="At least one image is required for analysis"
             )
-        
         if len(files) > 10:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Maximum 10 images allowed for analysis"
             )
-        
         # Process and analyze each image
         image_analyses = []
-        
+        reference_images_metadata = []
         for i, uploaded_file in enumerate(files):
             try:
                 # Validate file size (max 10MB)
@@ -2083,20 +2130,16 @@ async def analyze_images(
                         "description": None
                     })
                     continue
-                
                 # Read and validate image
                 image_data = await uploaded_file.read()
                 image = Image.open(BytesIO(image_data))
-                
                 # Convert to RGB if necessary
                 if image.mode not in ("RGB", "RGBA"):
                     image = image.convert("RGB")
                 elif image.mode == "RGBA":
-                    # Convert RGBA to RGB with white background
                     background = Image.new("RGB", image.size, (255, 255, 255))
                     background.paste(image, mask=image.split()[-1])
                     image = background
-                
                 # Validate image dimensions
                 if image.width < 64 or image.height < 64:
                     image_analyses.append({
@@ -2106,7 +2149,6 @@ async def analyze_images(
                         "description": None
                     })
                     continue
-                
                 if image.width > 2048 or image.height > 2048:
                     image_analyses.append({
                         "filename": uploaded_file.filename,
@@ -2115,14 +2157,11 @@ async def analyze_images(
                         "description": None
                     })
                     continue
-                
                 # Extract detailed description using AI vision
                 logger.info(f"Analyzing image {i+1}: {uploaded_file.filename}")
                 description = extract_detailed_image_description(image)
-                
                 # Also get basic technical analysis
                 basic_analysis = analyze_reference_images([image])
-                
                 image_analyses.append({
                     "filename": uploaded_file.filename,
                     "status": "success",
@@ -2136,23 +2175,45 @@ async def analyze_images(
                     },
                     "error": None
                 })
-                
+                # Save reference image metadata for session restoration
+                reference_images_metadata.append({
+                    "filename": uploaded_file.filename,
+                    "content_type": uploaded_file.content_type,
+                    # Optionally, save a base64 preview or a relative URL if saved to disk
+                })
                 logger.info(f"Successfully analyzed image {i+1}: {uploaded_file.filename}")
-                
             except Exception as e:
                 logger.error(f"Error analyzing image {uploaded_file.filename}: {str(e)}")
                 image_analyses.append({
                     "filename": uploaded_file.filename,
-                                       "status": "error",
+                    "status": "error",
                     "error": f"Analysis failed: {str(e)}",
                     "description": None
                 })
-        
+        # Save to input.json if project_id and session_id are provided
+        if project_id and session_id:
+            try:
+                from db import PROJECT_IMAGES_ROOT
+                session_folder = os.path.join(PROJECT_IMAGES_ROOT, project_id, session_id)
+                input_file = os.path.join(session_folder, "input.json")
+                # Load existing input.json if present
+                input_data = {}
+                if os.path.exists(input_file):
+                    with open(input_file, "r", encoding="utf-8") as f:
+                        input_data = json.load(f)
+                # Store reference images and analyses
+                input_data["reference_images"] = reference_images_metadata
+                input_data["reference_image_analyses"] = image_analyses
+                with open(input_file, "w", encoding="utf-8") as f:
+                    json.dump(input_data, f, indent=2)
+                logger.info(f"Saved reference image metadata and analyses to {input_file}")
+            except Exception as e:
+                logger.error(f"Failed to save reference image metadata/analyses to input.json: {e}")
+                # Don't fail the whole endpoint, but log
+
         # Count successful analyses
         successful_analyses = len([a for a in image_analyses if a["status"] == "success"])
-        
         logger.info(f"Image analysis completed: {successful_analyses}/{len(files)} successful")
-        
         return {
             "analyses": image_analyses,
             "summary": {
@@ -2162,7 +2223,6 @@ async def analyze_images(
             },
             "message": f"Analyzed {successful_analyses} out of {len(files)} images successfully"
         }
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -2179,86 +2239,27 @@ async def preview_combined_prompt(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Preview the combined prompt that merges user prompt with image descriptions.
-    This allows users to review and potentially modify the prompt before generation.
+    Combine user prompt and image descriptions for previewing the final prompt before generation.
     """
+    import json
     try:
-        logger.info(f"Combined prompt preview request from user {current_user['username']}")
-        
-        # Parse the JSON string of image descriptions
-        try:
-            image_descriptions_list = json.loads(image_descriptions)
-        except json.JSONDecodeError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid image_descriptions format"
-            )
-        
-        # Extract data from request
-        user_prompt = user_prompt.strip()
-        image_descriptions = image_descriptions_list
-        
-        # Validate inputs
-        if not user_prompt:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User prompt is required"
-            )
-        
-        if not image_descriptions or len(image_descriptions) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Image descriptions are required. Please analyze images first."
-            )
-        
-        # Filter out empty descriptions
-        valid_descriptions = [desc for desc in image_descriptions if desc and desc.strip()]
-        
-        if len(valid_descriptions) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No valid image descriptions found"
-            )
-        
-        # Generate combined prompt using the model function
-        combined_prompt = merge_image_descriptions_with_prompt(valid_descriptions, user_prompt)
-        
-        # Generate enhanced negative prompt
-        base_negative = "blurry, low quality, distorted, artifacts, noise, oversaturated, undersaturated, bad anatomy, deformed"
-        enhanced_negative = generate_enhanced_negative_prompt(valid_descriptions, base_negative)
-        
-        # Create breakdown for user review
-        breakdown = {
-            "original_user_prompt": user_prompt,
-            "number_of_reference_images": len(valid_descriptions),
-            "image_descriptions_summary": [
-                f"Image {i+1}: {desc[:150]}..." if len(desc) > 150 else f"Image {i+1}: {desc}"
-                for i, desc in enumerate(valid_descriptions)
-            ],
-            "combined_prompt": combined_prompt,
-            "enhanced_negative_prompt": enhanced_negative,
-            "preservation_strategy": "The combined prompt preserves visual themes, lighting, colors, and atmospheric elements from your reference images while applying your desired viewpoint change."
-        }
-        
-        logger.info(f"Successfully generated combined prompt preview for user {current_user['username']}")
-        
+        # Parse image descriptions
+        descriptions = json.loads(image_descriptions)
+        if not isinstance(descriptions, list):
+            raise ValueError("image_descriptions must be a list of strings")
+        # Combine all descriptions into one string
+        combined_descriptions = ". ".join([desc for desc in descriptions if isinstance(desc, str)])
+        # Merge with user prompt
+        combined_prompt = f"{combined_descriptions}. {user_prompt}" if combined_descriptions else user_prompt
         return {
-            "success": True,
             "combined_prompt": combined_prompt,
-            "enhanced_negative_prompt": enhanced_negative,
-            "breakdown": breakdown,
-            "message": "Combined prompt generated successfully. Review and modify if needed before generation."
+            "descriptions_used": descriptions,
+            "user_prompt": user_prompt
         }
-        
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error in combined prompt preview: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate combined prompt preview: {str(e)}"
-        )
-
+        return {
+            "detail": f"Failed to combine prompt: {str(e)}"
+        }
 # Register cleanup handler
 @atexit.register
 def cleanup():
@@ -2275,279 +2276,61 @@ async def startup_event():
     """Initialize database on startup"""
     init_db()
 
-@app.get("/projects/{project_id}/sessions/{session_id}/details")
-async def get_project_session_details(
-    project_id: str,
-    session_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Get detailed session data from project folder including input/output files
-    """
-    try:
-        logger.info(f"Getting session details for project {project_id}, session {session_id}")
-          # For filesystem-based project sessions (folder names like session_20250624_110740_04373c2b or fusion_session_20250624_110740_04373c2b)
-        if session_id.startswith('session_') or session_id.startswith('fusion_session_'):
-            # This is a filesystem session, skip database lookup and go directly to filesystem
-            session_type = "image_fusion_session" if session_id.startswith('fusion_session_') else "project_session"
-            session = {
-                "id": session_id,
-                "name": session_id,
-                "project_id": project_id,
-                "user_id": current_user['id'],  # Assume current user owns project sessions
-                "type": session_type
-            }
-        else:
-            # Try database lookup for other session types
-            from db import get_session_by_id
-            session = get_session_by_id(session_id)
-            
-            if not session:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Session not found"
-                )
-            
-            # Check if user owns the session
-            if session['user_id'] != current_user['id']:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized to access this session"
-                )        
-        # Load actual data from project folder files
-        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
-          # Find session folder
-        session_folder = None
-        if os.path.exists(project_dir):
-            for folder in os.listdir(project_dir):
-                # For filesystem sessions, do exact match; for database sessions, do prefix match
-                if session_id.startswith('session_') or session_id.startswith('fusion_session_'):
-                    if folder == session_id:  # Exact match for filesystem sessions
-                        session_folder = os.path.join(project_dir, folder)
-                        break
-                else:
-                    if session_id[:8] in folder:  # Prefix match for database sessions
-                        session_folder = os.path.join(project_dir, folder)
-                        break
-        
-        if not session_folder or not os.path.exists(session_folder):
-            # Return basic session data if folder not found
-            return {
-                "session": session,
-                "has_files": False,
-                "message": "Session data files not found in project folder"
-            }
-        
-        # Load input.json
-        input_data = None
-        input_file = os.path.join(session_folder, "input.json")
-        if os.path.exists(input_file):
-            try:
-                with open(input_file, 'r') as f:
-                    input_data = json.load(f)
-            except Exception as e:
-                logger.error(f"Error reading input file: {e}")
-        
-        # Load shots.json (for shot suggestion sessions)
-        shots_data = None
-        shots_file = os.path.join(session_folder, "shots.json")
-        if os.path.exists(shots_file):
-            try:
-                with open(shots_file, 'r') as f:
-                    shots_data = json.load(f)
-            except Exception as e:
-                logger.error(f"Error reading shots file: {e}")
-        
-        # Load output.json (for image fusion sessions)
-        output_data = None
-        output_file = os.path.join(session_folder, "output.json")
-        if os.path.exists(output_file):
-            try:
-                with open(output_file, 'r') as f:
-                    output_data = json.load(f)
-            except Exception as e:
-                logger.error(f"Error reading output file: {e}")
-        
-        # List generated images
-        images_dir = os.path.join(session_folder, "images")
-        image_files = []
-        if os.path.exists(images_dir):
-            for file in os.listdir(images_dir):
-                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    image_files.append({
-                        "filename": file,
-                        "path": os.path.join(images_dir, file),
-                        "url": f"/projects/{project_id}/sessions/{session_id}/images/{file}"
-                    })
-        
-        return {
-            "session": session,
-            "has_files": True,
-            "session_folder": session_folder,
-            "input_data": input_data,
-            "shots_data": shots_data,
-            "output_data": output_data,
-            "image_files": image_files,
-            "file_summary": {
-                "has_input": input_data is not None,
-                "has_shots": shots_data is not None,
-                "has_output": output_data is not None,
-                "image_count": len(image_files)
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting session details: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get session details: {str(e)}"
-        )
-
 @app.get("/projects/{project_id}/sessions/{session_id}/images/{filename}")
-async def get_session_image(
-    project_id: str,
-    session_id: str,
-    filename: str
-):
+async def get_session_image(project_id: str, session_id: str, filename: str):
     """
-    Serve image files from project session folders (public access for image display)
+    Serve an image file from the session's images directory with error logging.
     """
+    import os
+    from fastapi.responses import FileResponse
+    from db import PROJECT_IMAGES_ROOT
+    images_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id, session_id, "images")
+    file_path = os.path.join(images_dir, filename)
+    logger.info(f"Image requested: {file_path}")
+    if not os.path.exists(file_path):
+        logger.warning(f"Image not found: {file_path}")
+        return JSONResponse(status_code=404, content={"detail": f"Image not found: {filename}"})
     try:
-        # Security check: validate filename to prevent directory traversal
-        if '..' in filename or '/' in filename or '\\' in filename:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid filename"            )
-        
-        # Find session folder
-        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
-        session_folder = None
-        
-        if os.path.exists(project_dir):
-            for folder in os.listdir(project_dir):
-                # For filesystem sessions, do exact match; for database sessions, do prefix match
-                if session_id.startswith('session_') or session_id.startswith('fusion_session_'):
-                    if folder == session_id:  # Exact match for filesystem sessions
-                        session_folder = os.path.join(project_dir, folder)
-                        break
-                else:
-                    if session_id[:8] in folder:  # Prefix match for database sessions
-                        session_folder = os.path.join(project_dir, folder)
-                        break
-        
-        if not session_folder:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session folder not found"
-            )
-        
-        # Construct image path
-        image_path = os.path.join(session_folder, "images", filename)
-        
-        if not os.path.exists(image_path):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Image file not found"
-            )
-        
-        # Return the image file
-        from fastapi.responses import FileResponse
-        return FileResponse(
-            path=image_path,
-            media_type="image/png",
-            filename=filename
-        )
-        
-    except HTTPException:
-        raise
+        return FileResponse(file_path)
     except Exception as e:
-        logger.error(f"Error serving session image: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to serve image: {str(e)}"
-        )
-
+        logger.error(f"Failed to serve image {file_path}: {str(e)}")
+        return JSONResponse(status_code=500, content={"detail": f"Failed to serve image: {str(e)}"})
+    
 @app.post("/projects/{project_id}/fusion/start-session")
-async def start_fusion_session(
-    project_id: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def start_fusion_session(project_id: str, current_user: dict = Depends(get_current_user)):
     """
-    Create a new session subfolder for image fusion in the selected project.
-    Returns the session ID and folder path.
+    Create a new fusion session: create session folder, images subfolder, and minimal input.json.
     """
+    import uuid
+    import os
+    import json
+    from db import PROJECT_IMAGES_ROOT
+    from datetime import datetime
     try:
-        import uuid
-        from datetime import datetime
-        import os
-        from db import PROJECT_IMAGES_ROOT
-
-        # Check project ownership
-        project = get_project(project_id)
-        if not project or project["user_id"] != current_user["id"]:
-            raise HTTPException(status_code=404, detail="Project not found or not owned by user.")
-
-        # Generate session ID and folder
+        # Create unique session id
         session_id = str(uuid.uuid4())
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_name = f"fusion_session_{timestamp}_{session_id[:8]}"
         project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
-        session_dir = os.path.join(project_dir, session_name)
-        images_dir = os.path.join(session_dir, "images")
+        session_folder = os.path.join(project_dir, session_id)
+        images_dir = os.path.join(session_folder, "images")
         os.makedirs(images_dir, exist_ok=True)
-
-        # Optionally, save a minimal input.json to mark the session start
+        # Write minimal input.json
+        input_file = os.path.join(session_folder, "input.json")
         input_data = {
-            "type": "image_fusion",
             "created_at": datetime.now().isoformat(),
             "session_id": session_id,
-            "user_id": current_user["id"],
-            "project_id": project_id
+            "project_id": project_id,
+            "type": "fusion"
         }
-        input_file_path = os.path.join(session_dir, "input.json")
-        import json
-        with open(input_file_path, 'w') as f:
+        with open(input_file, "w", encoding="utf-8") as f:
             json.dump(input_data, f, indent=2)
-
+        logger.info(f"Created new fusion session: {session_id} for project {project_id}")
         return {
             "session_id": session_id,
-            "session_name": session_name,
-            "session_dir": session_dir,
+            "session_folder": session_folder,
             "images_dir": images_dir,
-            "input_file": input_file_path
+            "input_file": input_file,
+            "input_data": input_data
         }
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to start fusion session: {str(e)}")
-
-@app.delete("/projects/{project_id}/sessions/{session_name}")
-async def delete_project_session(
-    project_id: str,
-    session_name: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Delete a session subfolder (for shot suggestion or fusion) from a project.
-    """
-    try:
-        from db import PROJECT_IMAGES_ROOT
-        import os
-        # Check project ownership
-        project = get_project(project_id)
-        if not project or project["user_id"] != current_user["id"]:
-            raise HTTPException(status_code=404, detail="Project not found or not owned by user.")
-        # Find the session folder
-        project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
-        session_dir = os.path.join(project_dir, session_name)
-        if not os.path.exists(session_dir):
-            raise HTTPException(status_code=404, detail="Session folder not found.")
-        # Delete the session folder and all its contents
-        rmtree(session_dir)
-        return {"success": True, "message": f"Session '{session_name}' deleted."}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
+        logger.error(f"Failed to create fusion session: {str(e)}")
+        return JSONResponse(status_code=500, content={"detail": f"Failed to create fusion session: {str(e)}"})

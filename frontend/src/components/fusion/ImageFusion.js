@@ -32,6 +32,9 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import axios from 'axios';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import PsychologyIcon from '@mui/icons-material/Psychology';
+import DeleteIcon from '@mui/icons-material/Delete';
 
 const ImageFusion = ({ projectId }) => {
   const auth = useAuth();
@@ -58,13 +61,35 @@ const ImageFusion = ({ projectId }) => {
   const [progressStep, setProgressStep] = useState(0);
   const fileInputRef = useRef();
   const [fusionSession, setFusionSession] = useState(null);
+  const [fusionSessions, setFusionSessions] = useState([]);
+  const [fusionSessionsLoading, setFusionSessionsLoading] = useState(false);
+  const [fusionSessionsError, setFusionSessionsError] = useState('');
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState(null);
 
-  // Load previous fusion session when component mounts
+  // Load all fusion sessions for this project
   useEffect(() => {
     if (projectId && token) {
-      loadLastFusionSession();
+      setFusionSessionsLoading(true);
+      setFusionSessionsError('');
+      fetch(`http://localhost:8000/projects/${projectId}/sessions`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(res => res.json())
+        .then(data => {
+          const fusions = (data || []).filter(
+            session => session.type?.includes('fusion') || session.name?.includes('fusion')
+          );
+          setFusionSessions(fusions);
+          setFusionSessionsLoading(false);
+        })
+        .catch(err => {
+          setFusionSessionsError('Failed to load fusion sessions');
+          setFusionSessionsLoading(false);
+        });
     }
-  }, [projectId, token]);
+  }, [projectId, token, fusionSession]); // reload when session changes
 
   const loadLastFusionSession = async () => {
     try {
@@ -132,7 +157,12 @@ const ImageFusion = ({ projectId }) => {
     }
   };
 
-  const handleImageUpload = (event) => {
+  const handleImageUpload = async (event) => {
+    // Always start a new fusion session if one is not active
+    if (!fusionSession && startFusionSession) {
+      const session = await startFusionSession();
+      if (session) setFusionSession(session);
+    }
     const files = Array.from(event.target.files);
     const newImages = files.map(file => ({
       file,
@@ -477,26 +507,92 @@ const ImageFusion = ({ projectId }) => {
     // ... existing logic to handle image upload ...
   };
 
-  // Add a function to delete a session
-  const handleDeleteSession = async () => {
-    if (!fusionSession) return;
+  // Function to delete a fusion session
+  const handleDeleteSession = async (session) => {
+    setSessionToDelete(session);
+    setDeleteDialogOpen(true);
+  };
+  const confirmDeleteSession = async () => {
+    if (!sessionToDelete) return;
     try {
-      const token = auth?.token;
-      const sessionName = fusionSession.session_name;
-      await axios.delete(`http://localhost:8000/projects/${projectId}/sessions/${sessionName}`, {
+      await fetch(`http://localhost:8000/projects/${projectId}/sessions/${sessionToDelete.name || sessionToDelete.id}`, {
+        method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       });
+      setFusionSessions(fusionSessions.filter(s => (s.id || s.name) !== (sessionToDelete.id || sessionToDelete.name)));
+      setSessionToDelete(null);
+      setDeleteDialogOpen(false);
       setFusionSession(null);
-      setReferenceImages([]);
-      setImageAnalyses([]);
-      setAnalysisComplete(false);
-      setPrompt('');
-      setFinalPrompt('');
+      setActiveSessionId(null);
       setGeneratedImages([]);
       setCurrentGeneratedImage(null);
-      setError('Session deleted.');
-    } catch (error) {
+      setPrompt('');
+      setFinalPrompt('');
+      setReferenceImages([]);
+    } catch (err) {
       setError('Failed to delete session');
+      setDeleteDialogOpen(false);
+    }
+  };
+
+  // Function to load and restore a fusion session's details (now restores reference images and prompt)
+  const loadFusionSessionDetails = async (session) => {
+    try {
+      setFusionSession(session);
+      setActiveSessionId(session.id || session.name);
+      // Fetch session details
+      const detailsResponse = await fetch(
+        `http://localhost:8000/projects/${projectId}/sessions/${session.id || session.name}/details`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (detailsResponse.ok) {
+        const sessionData = await detailsResponse.json();
+        // Restore prompt and final prompt (robust to missing fields)
+        setPrompt(sessionData.input_data?.final_prompt || sessionData.input_data?.prompt || '');
+        setFinalPrompt(sessionData.input_data?.final_prompt || sessionData.output_data?.final_prompt || '');
+        setShowFinalPrompt(!!(sessionData.input_data?.final_prompt || sessionData.output_data?.final_prompt));
+        // Restore reference images if available (simulate as preview images)
+        if (sessionData.input_data && Array.isArray(sessionData.input_data.reference_images)) {
+          setReferenceImages(sessionData.input_data.reference_images.map((img, idx) => ({
+            file: null,
+            name: img.filename || `reference_${idx+1}.png`,
+            preview: img.url || img.base64 || ''
+          })));
+        } else {
+          setReferenceImages([]);
+        }
+        // Restore generated images
+        if (sessionData.image_files && sessionData.image_files.length > 0) {
+          const fusionImages = sessionData.image_files.map((imageFile, index) => ({
+            id: `fusion_${Date.now()}_${index}`,
+            image_url: `http://localhost:8000${imageFile.url}`,
+            prompt: sessionData.input_data?.final_prompt || sessionData.output_data?.final_prompt || 'Fusion image',
+            timestamp: sessionData.session?.created_at ? new Date(sessionData.session.created_at).toLocaleString() : 'Unknown'
+          }));
+          setGeneratedImages(fusionImages);
+          setCurrentGeneratedImage(fusionImages[0] || null);
+        } else {
+          setGeneratedImages([]);
+          setCurrentGeneratedImage(null);
+        }
+      } else {
+        // If detailsResponse is not ok, clear UI to safe state
+        setPrompt('');
+        setFinalPrompt('');
+        setShowFinalPrompt(false);
+        setReferenceImages([]);
+        setGeneratedImages([]);
+        setCurrentGeneratedImage(null);
+        setError('Failed to load session details');
+      }
+    } catch (err) {
+      setPrompt('');
+      setFinalPrompt('');
+      setShowFinalPrompt(false);
+      setReferenceImages([]);
+      setGeneratedImages([]);
+      setCurrentGeneratedImage(null);
+      setError('Failed to load session details');
     }
   };
 
@@ -515,7 +611,76 @@ const ImageFusion = ({ projectId }) => {
       p: 2,
       pt: 10 // Added padding-top for navbar spacing
     }}>
-      <Container maxWidth={false} sx={{ maxWidth: '100%', px: 2 }}>        {/* Header */}
+      <Container maxWidth={false} sx={{ maxWidth: '100%', px: 2 }}>        {/* Fusion Session List UI - now as cards with icons, delete, and click-to-load */}
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="h6" sx={{ fontWeight: 'bold', color: 'hsl(222.2, 47.4%, 11.2%)', display: 'flex', alignItems: 'center', gap: 1 }}>
+            <FolderOpenIcon sx={{ color: 'hsl(215.4, 16.3%, 46.9%)' }} /> Fusion Sessions
+          </Typography>
+          {fusionSessionsLoading ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+              <CircularProgress size={20} /> <span>Loading sessions...</span>
+            </Box>
+          ) : fusionSessionsError ? (
+            <Alert severity="error" sx={{ mt: 1 }}>{fusionSessionsError}</Alert>
+          ) : fusionSessions.length === 0 ? (
+            <Alert severity="info" sx={{ mt: 1 }}>No fusion sessions found for this project.</Alert>
+          ) : (
+            <Grid container spacing={2} sx={{ mt: 1 }}>
+              {fusionSessions.map((session, idx) => {
+                const isActive = (activeSessionId === (session.id || session.name));
+                return (
+                  <Grid item xs={12} sm={6} md={4} lg={3} key={session.id || session.name}>
+                    <Paper
+                      elevation={isActive ? 6 : 1}
+                      sx={{
+                        p: 2,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 2,
+                        cursor: 'pointer',
+                        border: isActive ? '2px solid hsl(222.2, 47.4%, 11.2%)' : '1px solid hsl(214.3, 31.8%, 91.4%)',
+                        bgcolor: isActive ? 'hsl(210, 40%, 96.1%)' : 'hsl(0, 0%, 100%)',
+                        transition: 'all 0.2s',
+                        position: 'relative'
+                      }}
+                      onClick={() => loadFusionSessionDetails(session)}
+                    >
+                      <PsychologyIcon sx={{ color: isActive ? 'hsl(222.2, 47.4%, 11.2%)' : 'hsl(215.4, 16.3%, 46.9%)', fontSize: 32 }} />
+                      <Box>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: isActive ? 'hsl(222.2, 47.4%, 11.2%)' : 'hsl(215.4, 16.3%, 46.9%)' }}>
+                          {`Session ${idx + 1}`}
+                        </Typography>
+                        {session.created_at && (
+                          <Typography variant="caption" sx={{ color: 'hsl(215.4, 16.3%, 46.9%)' }}>
+                            {new Date(session.created_at).toLocaleString()}
+                          </Typography>
+                        )}
+                      </Box>
+                      <IconButton
+                        size="small"
+                        sx={{ position: 'absolute', top: 4, right: 4, color: 'hsl(0, 84.2%, 60.2%)' }}
+                        onClick={e => { e.stopPropagation(); handleDeleteSession(session); }}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Paper>
+                  </Grid>
+                );
+              })}
+            </Grid>
+          )}
+          {/* Delete confirmation dialog */}
+          <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+            <DialogTitle>Delete Fusion Session</DialogTitle>
+            <DialogContent>Are you sure you want to delete this fusion session? This cannot be undone.</DialogContent>
+            <DialogActions>
+              <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
+              <Button color="error" onClick={confirmDeleteSession}>Delete</Button>
+            </DialogActions>
+          </Dialog>
+        </Box>
+
+        {/* Header */}
         <Box sx={{ 
           display: 'flex', 
           justifyContent: 'space-between', 
@@ -916,8 +1081,7 @@ const ImageFusion = ({ projectId }) => {
                       color: 'hsl(215.4, 16.3%, 46.9%)' // --muted-foreground
                     },
                     '& .MuiFormHelperText-root': {
-                      color: 'hsl(215.4, 16.3%, 46.9%)', // --muted-foreground
-                      fontSize: '0.75rem'
+                      color: 'hsl(215.4, 16.3%, 46.9%)' // --muted-foreground
                     }
                   }}
                 />
