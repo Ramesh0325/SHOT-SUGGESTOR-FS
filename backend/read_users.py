@@ -8,12 +8,15 @@ db_path = os.path.join(os.path.dirname(__file__), 'shots_app.db')
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 
-# Fetch all users' name and email
-cursor.execute("SELECT username, email FROM users")
+# Fetch all users
+cursor.execute("SELECT id, username FROM users")
 users = cursor.fetchall()
 
 print("Registered Users:")
-for username, email in users:
-    print(f"Name: {username}, Email: {email}")
+if users:
+    for user_id, username in users:
+        print(f"ID: {user_id}, Username: {username}")
+else:
+    print("No users found in database!")
 
 conn.close()

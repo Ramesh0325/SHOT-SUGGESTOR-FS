@@ -32,7 +32,8 @@ import {
   ArrowBack,
   Add,
   PhotoCamera,
-  Psychology
+  Psychology,
+  Delete
 } from '@mui/icons-material';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
@@ -58,13 +59,20 @@ const ShotSuggestorWithTabs = () => {
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarSeverity, setSnackbarSeverity] = useState('success');
+  const [previousSessions, setPreviousSessions] = useState([]);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState(null);
   const { user } = useAuth();  // Load project from URL parameter
   useEffect(() => {
     if (projectIdFromUrl && user) {
       console.log('Loading project from URL with authenticated user:', projectIdFromUrl);
+      console.log('User details:', user);
+      console.log('Token in localStorage:', localStorage.getItem('token') ? 'Present' : 'Missing');
       loadProjectFromId(projectIdFromUrl);
     } else if (projectIdFromUrl && !user) {
       console.log('Project ID found in URL but user not authenticated yet, waiting...');
+      console.log('User state:', user);
+      console.log('Token in localStorage:', localStorage.getItem('token') ? 'Present' : 'Missing');
     }
   }, [projectIdFromUrl, user]);
 
@@ -79,9 +87,100 @@ const ShotSuggestorWithTabs = () => {
   // Load last session shots when project is selected
   useEffect(() => {
     if (selectedProject) {
+      loadPreviousSessions();
       loadLastSessionShots();
     }
-  }, [selectedProject]);  const loadLastSessionShots = async () => {
+  }, [selectedProject]);  const loadPreviousSessions = async () => {
+    if (!selectedProject) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.log('No auth token found in localStorage');
+        showSnackbar('Please log in to view your sessions', 'warning');
+        return;
+      }
+      
+      console.log('Loading previous sessions for project:', selectedProject.id);
+      console.log('Using token:', token ? `${token.substring(0, 20)}...` : 'null');
+      
+      const response = await axios.get(`http://localhost:8000/projects/${selectedProject.id}/sessions`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      console.log('Raw sessions response:', response.data);
+      
+      // Filter shot suggestion sessions (exclude fusion sessions)
+      const shotSessions = response.data.filter(session => 
+        !session.type?.includes('fusion') && !session.name?.includes('fusion')
+      );
+      
+      console.log('Filtered shot sessions:', shotSessions);
+      setPreviousSessions(shotSessions);
+      console.log('Previous shot sessions loaded:', shotSessions.length);
+      
+      if (shotSessions.length > 0) {
+        showSnackbar(`Found ${shotSessions.length} previous sessions`, 'success');
+      }
+    } catch (error) {
+      console.error('Error loading previous sessions:', error);
+      console.error('Error status:', error.response?.status);
+      console.error('Error details:', error.response?.data);
+      console.error('Error message:', error.message);
+      
+      // Show user-friendly error message
+      if (error.response?.status === 401) {
+        console.log('Authentication failed - redirecting to login');
+        showSnackbar('Authentication failed. Please log in again.', 'error');
+      } else if (error.response?.status === 404) {
+        console.log('Project not found');
+        showSnackbar('Project not found', 'warning');
+      } else if (error.code === 'ERR_NETWORK') {
+        console.log('Network error - backend server may be down');
+        showSnackbar('Cannot connect to server. Please check if backend is running.', 'error');
+      } else {
+        console.log('Unknown error loading sessions');
+        showSnackbar('Error loading previous sessions', 'error');
+      }
+      
+      setPreviousSessions([]);
+    }
+  };
+
+  const loadSessionShots = async (session) => {
+    if (!selectedProject || !session) return;
+
+    console.log('Loading shots from session:', session.id);
+    setSessionLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const detailsResponse = await axios.get(
+        `http://localhost:8000/projects/${selectedProject.id}/sessions/${session.id}/details`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      
+      if (detailsResponse.data.shots_data?.shots) {
+        const shotsWithImages = detailsResponse.data.shots_data.shots.map(shot => ({
+          ...shot,
+          image_url: shot.image_url ? `http://localhost:8000${shot.image_url}` : shot.image_url
+        }));
+        setShots(shotsWithImages);
+        setSessionInfo({ id: session.id, ...detailsResponse.data.session });
+        if (detailsResponse.data.input_data?.scene_description) {
+          setSceneDescription(detailsResponse.data.input_data.scene_description);
+        }
+        console.log('Successfully loaded shots from session:', shotsWithImages.length, 'shots with images:', shotsWithImages.filter(s => s.image_url).length);
+        showSnackbar(`Loaded ${shotsWithImages.length} shots from session`, 'success');
+      }
+    } catch (error) {
+      console.error('Error loading session shots:', error);
+      showSnackbar('Error loading session shots', 'error');
+    } finally {
+      setSessionLoading(false);
+    }
+  };
+
+  const loadLastSessionShots = async () => {
     if (!selectedProject) return;
 
     console.log('Loading last session shots for project:', selectedProject.id);
@@ -124,15 +223,19 @@ const ShotSuggestorWithTabs = () => {
         console.log('Session details:', detailsResponse.data); // Debug log
         
         if (detailsResponse.data.shots_data?.shots) {
-          setShots(detailsResponse.data.shots_data.shots);
+          const shotsWithImages = detailsResponse.data.shots_data.shots.map(shot => ({
+            ...shot,
+            image_url: shot.image_url ? `http://localhost:8000${shot.image_url}` : shot.image_url
+          }));
+          setShots(shotsWithImages);
           setSessionInfo({ id: lastSession.id, ...detailsResponse.data.session });
           if (detailsResponse.data.input_data?.scene_description) {
             setSceneDescription(detailsResponse.data.input_data.scene_description);
           }
-          console.log('Successfully loaded previous shots:', detailsResponse.data.shots_data.shots.length);
+          console.log('Successfully loaded previous shots:', shotsWithImages.length, 'with images:', shotsWithImages.filter(s => s.image_url).length);
           // Only show notification if there are actual shots loaded
-          if (detailsResponse.data.shots_data.shots.length > 0) {
-            showSnackbar(`Loaded ${detailsResponse.data.shots_data.shots.length} previous shots from project`, 'info');
+          if (shotsWithImages.length > 0) {
+            showSnackbar(`Loaded ${shotsWithImages.length} previous shots from project`, 'info');
           }
         }
       } else {
@@ -221,6 +324,71 @@ const ShotSuggestorWithTabs = () => {
     setSnackbarOpen(true);
   };
 
+  const handleDeleteSession = (session) => {
+    console.log('Delete button clicked for session:', session);
+    setSessionToDelete(session);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDeleteSession = async () => {
+    if (!sessionToDelete || !selectedProject) return;
+
+    console.log('Attempting to delete session:', sessionToDelete.id, 'from project:', selectedProject.id);
+    const isDeletingCurrentSession = sessionInfo?.id === sessionToDelete.id;
+    console.log('Is deleting current session:', isDeletingCurrentSession);
+    
+    try {
+      const token = localStorage.getItem('token');
+      console.log('Using token for delete:', token ? 'Present' : 'Missing');
+      
+      const response = await axios.delete(
+        `http://localhost:8000/projects/${selectedProject.id}/sessions/${sessionToDelete.id}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      
+      console.log('Delete response:', response.status, response.data);
+
+      // Remove from local state
+      setPreviousSessions(prev => prev.filter(s => s.id !== sessionToDelete.id));
+      
+      // If we're deleting the current session, clear the UI and load the next available session
+      if (isDeletingCurrentSession) {
+        console.log('Clearing current session data');
+        setShots([]);
+        setSessionInfo(null);
+        setSceneDescription('');
+        
+        // After deleting current session, try to load the most recent remaining session
+        const remainingSessions = previousSessions.filter(s => s.id !== sessionToDelete.id);
+        if (remainingSessions.length > 0) {
+          console.log('Loading next available session:', remainingSessions[0].id);
+          setTimeout(() => {
+            loadSessionShots(remainingSessions[0]);
+          }, 500); // Small delay to ensure state is updated
+        }
+      }
+
+      showSnackbar(
+        isDeletingCurrentSession 
+          ? 'Current session deleted successfully' 
+          : 'Session deleted successfully', 
+        'success'
+      );
+    } catch (error) {
+      console.error('Error deleting session:', error);
+      console.error('Error details:', error.response?.data);
+      showSnackbar(`Error deleting session: ${error.response?.data?.detail || error.message}`, 'error');
+    } finally {
+      setDeleteDialogOpen(false);
+      setSessionToDelete(null);
+    }
+  };
+
+  const cancelDeleteSession = () => {
+    setDeleteDialogOpen(false);
+    setSessionToDelete(null);
+  };
+
   const generateShots = async () => {
     if (!sceneDescription.trim()) {
       showSnackbar('Please enter a scene description', 'error');
@@ -255,6 +423,9 @@ const ShotSuggestorWithTabs = () => {
         setShots(response.data.suggestions);
         setSessionInfo(response.data.session_info);
         showSnackbar('Shots generated successfully!');
+        
+        // Refresh previous sessions to show the new session icon
+        await loadPreviousSessions();
       } else {
         showSnackbar('Failed to generate shots', 'error');
       }
@@ -334,6 +505,7 @@ const ShotSuggestorWithTabs = () => {
     }
   };const renderShotGenerator = () => (
     <Container maxWidth="xl" sx={{ py: 3, minHeight: '100vh' }}>
+      
       <Grid container spacing={3}>
         {/* Left Panel - Shot Configuration */}
         <Grid item xs={12} lg={4}>
@@ -388,6 +560,182 @@ const ShotSuggestorWithTabs = () => {
               <Alert severity="info" sx={{ mt: 2 }}>
                 Please select a project first to generate shots.
               </Alert>
+            )}
+
+            {/* Previous Shot Sessions as Icons */}
+            {selectedProject && (
+              <Box sx={{ mt: 3 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                  <Typography variant="subtitle1" fontWeight="bold">
+                    Shot Sessions
+                  </Typography>
+                  <Button 
+                    size="small" 
+                    onClick={loadPreviousSessions}
+                    variant="outlined"
+                  >
+                    Refresh
+                  </Button>
+                </Box>
+                
+                {previousSessions.length === 0 && shots.length === 0 ? (
+                  <Alert severity="info" sx={{ textAlign: 'center' }}>
+                    No shot sessions yet. Generate your first shots to get started!
+                  </Alert>
+                ) : (
+                  <Grid container spacing={1}>
+                    {/* Show current session as "active" if shots are loaded */}
+                    {shots.length > 0 && sessionInfo && (
+                      <Grid item xs={6}>
+                        <Card 
+                          sx={{ 
+                            minHeight: 80,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            bgcolor: 'success.light',
+                            color: 'white',
+                            border: '2px solid',
+                            borderColor: 'success.main',
+                            position: 'relative',
+                            '&:hover .delete-button': {
+                              opacity: 1
+                            }
+                          }}
+                        >
+                          {/* Delete Button for Current Session */}
+                          <IconButton
+                            className="delete-button"
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              console.log('Delete current session clicked');
+                              handleDeleteSession(sessionInfo);
+                            }}
+                            sx={{
+                              position: 'absolute',
+                              top: 4,
+                              right: 4,
+                              opacity: 1, // Always visible for testing
+                              transition: 'opacity 0.2s',
+                              color: 'error.main',
+                              bgcolor: 'background.paper',
+                              '&:hover': {
+                                bgcolor: 'error.light',
+                                color: 'white'
+                              },
+                              width: 24,
+                              height: 24
+                            }}
+                          >
+                            <Delete sx={{ fontSize: 16 }} />
+                          </IconButton>
+                          
+                          <CardContent sx={{ textAlign: 'center', py: 1 }}>
+                            <CameraAlt sx={{ fontSize: 24, mb: 0.5 }} />
+                            <Typography variant="caption" fontWeight="bold" display="block">
+                              Current Session
+                            </Typography>
+                            <Typography variant="caption">
+                              {shots.length} shots
+                            </Typography>
+                          </CardContent>
+                        </Card>
+                      </Grid>
+                    )}
+                    
+                    {previousSessions.map((session, index) => {
+                      const sessionDate = new Date(session.created_at);
+                      const timeStamp = sessionDate.toLocaleDateString('en-US', { 
+                        month: 'short', 
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      });
+                      
+                      const isCurrentSession = sessionInfo?.id === session.id;
+                      
+                      return (
+                        <Grid item xs={6} key={session.id}>
+                          <Card 
+                            sx={{ 
+                              minHeight: 80,
+                              display: 'flex',
+                              flexDirection: 'column',
+                              position: 'relative',
+                              border: isCurrentSession ? '2px solid' : '1px solid',
+                              borderColor: isCurrentSession ? 'primary.main' : 'divider',
+                              bgcolor: isCurrentSession ? 'primary.light' : 'background.paper',
+                              color: isCurrentSession ? 'white' : 'text.primary',
+                              '&:hover .delete-button': {
+                                opacity: 1
+                              }
+                            }}
+                          >
+                            {/* Delete Button */}
+                            <IconButton
+                              className="delete-button"
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                console.log('Delete icon clicked directly');
+                                handleDeleteSession(session);
+                              }}
+                              sx={{
+                                position: 'absolute',
+                                top: 4,
+                                right: 4,
+                                opacity: 1, // Always visible for testing
+                                transition: 'opacity 0.2s',
+                                color: 'error.main',
+                                bgcolor: 'background.paper',
+                                '&:hover': {
+                                  bgcolor: 'error.light',
+                                  color: 'white'
+                                },
+                                width: 24,
+                                height: 24
+                              }}
+                            >
+                              <Delete sx={{ fontSize: 16 }} />
+                            </IconButton>
+
+                            {/* Clickable Content */}
+                            <Box
+                              sx={{
+                                cursor: 'pointer',
+                                width: '100%',
+                                height: '100%',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                '&:hover': { 
+                                  bgcolor: isCurrentSession ? 'primary.dark' : 'action.hover',
+                                  transform: 'scale(1.02)',
+                                  transition: 'all 0.2s'
+                                }
+                              }}
+                              onClick={() => loadSessionShots(session)}
+                            >
+                              <CardContent sx={{ textAlign: 'center', py: 1 }}>
+                                <CameraAlt sx={{ fontSize: 24, mb: 0.5 }} />
+                                <Typography variant="caption" fontWeight="bold" display="block">
+                                  Session {index + 1}
+                                </Typography>
+                                <Typography variant="caption" sx={{ opacity: isCurrentSession ? 0.9 : 0.7 }}>
+                                  {timeStamp}
+                                </Typography>
+                              </CardContent>
+                            </Box>
+                          </Card>
+                        </Grid>
+                      );
+                    })}
+                  </Grid>
+                )}
+              </Box>
             )}
           </Paper>
         </Grid>
@@ -526,9 +874,65 @@ const ShotSuggestorWithTabs = () => {
           boxShadow: 1,
           borderBottomLeftRadius: { xs: 16, md: 32 },
           borderBottomRightRadius: { xs: 16, md: 32 },
-          mb: 4
+          mb: 4,
+          position: 'relative'
         }}
       >
+        {/* Back to Projects button in header when project is selected */}
+        {selectedProject && (
+          <Box sx={{ 
+            position: 'absolute',
+            left: { xs: 16, md: 32 },
+            top: '50%',
+            transform: 'translateY(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            zIndex: 1
+          }}>
+            <Button
+              variant="contained"
+              startIcon={<ArrowBack />}
+              onClick={handleBackToProjects}
+              size="small"
+              sx={{ 
+                bgcolor: 'primary.main',
+                '&:hover': { bgcolor: 'primary.dark' },
+                borderRadius: 2,
+                px: 2
+              }}
+            >
+              Projects
+            </Button>
+          </Box>
+        )}
+        
+        {/* Project info in header when project is selected */}
+        {selectedProject && (
+          <Box sx={{ 
+            position: 'absolute',
+            right: { xs: 16, md: 32 },
+            top: '50%',
+            transform: 'translateY(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            zIndex: 1
+          }}>
+            <Chip 
+              label={selectedProject.name} 
+              color="primary" 
+              variant="filled"
+              sx={{ 
+                fontSize: '0.875rem', 
+                fontWeight: 'bold',
+                bgcolor: 'primary.light',
+                color: 'white'
+              }}
+            />
+          </Box>
+        )}
+        
         <Typography variant="h3" fontWeight="bold" sx={{ mb: 1, fontSize: { xs: 28, md: 40 } }}>
           Shot Suggestion Studio
         </Typography>
@@ -607,6 +1011,65 @@ const ShotSuggestorWithTabs = () => {
               </DialogActions>
             </>
           )}
+        </Dialog>
+
+        {/* Delete Session Confirmation Dialog */}
+        <Dialog 
+          open={deleteDialogOpen} 
+          onClose={cancelDeleteSession}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle>
+            Delete Session
+          </DialogTitle>
+          <DialogContent>
+            {sessionToDelete && sessionInfo?.id === sessionToDelete.id ? (
+              <>
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  <strong>You are about to delete the current active session.</strong>
+                </Alert>
+                <Typography variant="body1">
+                  This will clear your current shots and switch to another session (if available). This action cannot be undone.
+                </Typography>
+              </>
+            ) : (
+              <Typography variant="body1">
+                Are you sure you want to delete this session? This action cannot be undone.
+              </Typography>
+            )}
+            {sessionToDelete && (
+              <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
+                <Typography variant="subtitle2" fontWeight="bold">
+                  Session: {sessionToDelete.name || sessionToDelete.id}
+                  {sessionInfo?.id === sessionToDelete.id && (
+                    <Chip 
+                      label="Current" 
+                      size="small" 
+                      color="success" 
+                      sx={{ ml: 1 }} 
+                    />
+                  )}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Created: {new Date(sessionToDelete.created_at).toLocaleString()}
+                </Typography>
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={cancelDeleteSession} color="inherit">
+              Cancel
+            </Button>
+            <Button 
+              onClick={confirmDeleteSession} 
+              color="error" 
+              variant="contained"
+              startIcon={<Delete />}
+            >
+              Delete
+            </Button>
+          </DialogActions>
         </Dialog>
 
         {/* Snackbar for notifications */}

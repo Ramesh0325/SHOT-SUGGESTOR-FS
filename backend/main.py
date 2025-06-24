@@ -720,33 +720,65 @@ async def generate_shot_image_endpoint(
                 shot_idx = int(shot_index) if shot_index else None
                 
                 if shot_idx is not None:
-                    # Create a simple project image save
+                    # Create session-specific image save path
                     try:
                         import base64
                         import os
                         from datetime import datetime
                         
-                        # Create project images directory
-                        project_images_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id or "default")
-                        os.makedirs(project_images_dir, exist_ok=True)
+                        # Create session images directory
+                        session_images_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id, session_id, "images")
+                        os.makedirs(session_images_dir, exist_ok=True)
                         
-                        # Save image file
+                        # Save image file with shot index
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         image_filename = f"shot_{shot_idx}_{timestamp}.png"
-                        image_path = os.path.join(project_images_dir, image_filename)
+                        image_path = os.path.join(session_images_dir, image_filename)
                         
                         # Decode and save image
-                        image_bytes = base64.b64decode(image_data)
+                        if image_data.startswith('data:image'):
+                            # Remove data URL prefix if present
+                            image_data_clean = image_data.split(',')[1]
+                        else:
+                            image_data_clean = image_data
+                            
+                        image_bytes = base64.b64decode(image_data_clean)
                         with open(image_path, 'wb') as f:
                             f.write(image_bytes)
+                          # Create relative path for frontend URL
+                        relative_image_path = f"/projects/{project_id}/sessions/{session_id}/images/{image_filename}"
                         
                         response["saved_to_project"] = True
                         response["image_file_path"] = image_path
                         response["image_filename"] = image_filename
-                        logger.info(f"Shot image saved to: {image_path}")
+                        response["image_url"] = f"http://localhost:8000{relative_image_path}"  # Update URL to point to saved image
+                        logger.info(f"Shot image saved to session: {image_path}")
+                        
+                        # Update shots.json file with the image information
+                        try:
+                            shots_file = os.path.join(PROJECT_IMAGES_ROOT, project_id, session_id, "shots.json")
+                            if os.path.exists(shots_file):
+                                with open(shots_file, 'r') as f:
+                                    shots_data = json.load(f)
+                                
+                                # Update the specific shot with image URL
+                                if 'shots' in shots_data and shot_idx < len(shots_data['shots']):
+                                    shots_data['shots'][shot_idx]['image_url'] = relative_image_path
+                                    shots_data['shots'][shot_idx]['image_filename'] = image_filename
+                                    shots_data['shots'][shot_idx]['image_generated_at'] = datetime.now().isoformat()
+                                    
+                                    # Save updated shots.json
+                                    with open(shots_file, 'w') as f:
+                                        json.dump(shots_data, f, indent=2)
+                                    
+                                    logger.info(f"Updated shots.json with image for shot {shot_idx}")
+                                    response["shots_json_updated"] = True
+                        except Exception as shots_update_error:
+                            logger.error(f"Error updating shots.json: {shots_update_error}")
+                            response["shots_json_updated"] = False
                         
                     except Exception as save_error:
-                        logger.error(f"Error saving shot image: {save_error}")
+                        logger.error(f"Error saving shot image to session: {save_error}")
                         response["saved_to_project"] = False
                 else:
                     logger.error("Failed to save image to project structure - invalid shot index")
@@ -1204,8 +1236,7 @@ async def fusion_generate_image_with_final_prompt(
                 if saved_data:
                     logger.info(f"Fusion session saved to project {project_id}")
                 else:
-                    logger.warning("Failed to save fusion session to project")
-                    
+                    logger.warning("Failed to save fusion session to project")                    
             except Exception as save_error:
                 logger.error(f"Error saving fusion session: {str(save_error)}")
         
@@ -1224,6 +1255,9 @@ async def fusion_generate_image_with_final_prompt(
                 "session_dir": saved_data["session_dir"],
                 "images_dir": saved_data["images_dir"]
             }
+            # Add image URL for frontend display
+            if saved_data.get("image_filename"):
+                response_data["image_url"] = f"http://localhost:8000/projects/{project_id}/sessions/{saved_data['session_name']}/images/{saved_data['image_filename']}"
         
         return response_data
         
@@ -2252,34 +2286,49 @@ async def get_project_session_details(
     """
     try:
         logger.info(f"Getting session details for project {project_id}, session {session_id}")
-        
-        # Get session from database first
-        from db import get_session_by_id
-        session = get_session_by_id(session_id)
-        
-        if not session:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session not found"
-            )
-        
-        # Check if user owns the session
-        if session['user_id'] != current_user['id']:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this session"
-            )
-        
+          # For filesystem-based project sessions (folder names like session_20250624_110740_04373c2b or fusion_session_20250624_110740_04373c2b)
+        if session_id.startswith('session_') or session_id.startswith('fusion_session_'):
+            # This is a filesystem session, skip database lookup and go directly to filesystem
+            session_type = "image_fusion_session" if session_id.startswith('fusion_session_') else "project_session"
+            session = {
+                "id": session_id,
+                "name": session_id,
+                "project_id": project_id,
+                "user_id": current_user['id'],  # Assume current user owns project sessions
+                "type": session_type
+            }
+        else:
+            # Try database lookup for other session types
+            from db import get_session_by_id
+            session = get_session_by_id(session_id)
+            
+            if not session:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Session not found"
+                )
+            
+            # Check if user owns the session
+            if session['user_id'] != current_user['id']:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to access this session"
+                )        
         # Load actual data from project folder files
         project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
-        
-        # Find session folder by searching for session name
+          # Find session folder
         session_folder = None
         if os.path.exists(project_dir):
             for folder in os.listdir(project_dir):
-                if session_id[:8] in folder:  # Match session ID prefix
-                    session_folder = os.path.join(project_dir, folder)
-                    break
+                # For filesystem sessions, do exact match; for database sessions, do prefix match
+                if session_id.startswith('session_') or session_id.startswith('fusion_session_'):
+                    if folder == session_id:  # Exact match for filesystem sessions
+                        session_folder = os.path.join(project_dir, folder)
+                        break
+                else:
+                    if session_id[:8] in folder:  # Prefix match for database sessions
+                        session_folder = os.path.join(project_dir, folder)
+                        break
         
         if not session_folder or not os.path.exists(session_folder):
             # Return basic session data if folder not found
@@ -2360,19 +2409,17 @@ async def get_project_session_details(
 async def get_session_image(
     project_id: str,
     session_id: str,
-    filename: str,
-    current_user: dict = Depends(get_current_user)
+    filename: str
 ):
     """
-    Serve image files from project session folders
+    Serve image files from project session folders (public access for image display)
     """
     try:
         # Security check: validate filename to prevent directory traversal
         if '..' in filename or '/' in filename or '\\' in filename:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid filename"
-            )
+                detail="Invalid filename"            )
         
         # Find session folder
         project_dir = os.path.join(PROJECT_IMAGES_ROOT, project_id)
@@ -2380,9 +2427,15 @@ async def get_session_image(
         
         if os.path.exists(project_dir):
             for folder in os.listdir(project_dir):
-                if session_id[:8] in folder:  # Match session ID prefix
-                    session_folder = os.path.join(project_dir, folder)
-                    break
+                # For filesystem sessions, do exact match; for database sessions, do prefix match
+                if session_id.startswith('session_') or session_id.startswith('fusion_session_'):
+                    if folder == session_id:  # Exact match for filesystem sessions
+                        session_folder = os.path.join(project_dir, folder)
+                        break
+                else:
+                    if session_id[:8] in folder:  # Prefix match for database sessions
+                        session_folder = os.path.join(project_dir, folder)
+                        break
         
         if not session_folder:
             raise HTTPException(

@@ -944,33 +944,60 @@ def save_shots_to_filesystem(user_id, session_data, shots_data, project_id=None)
         return None
 
 def list_project_sessions(user_id, project_id):
-    """Get all sessions for a specific project from the filesystem"""
+    """Get all sessions for a specific project from the PROJECT_IMAGES_ROOT filesystem"""
     try:
-        project_folder = os.path.join(SESSIONS_ROOT, str(user_id), project_id)
+        import json
+        # Look in PROJECT_IMAGES_ROOT instead of SESSIONS_ROOT
+        project_folder = os.path.join(PROJECT_IMAGES_ROOT, project_id)
         if not os.path.exists(project_folder):
+            print(f"Project folder does not exist: {project_folder}")
             return []
         
+        print(f"Looking for sessions in: {project_folder}")
         sessions = []
-        # Get all session directories in this project folder
+          # Get all session directories in this project folder (both session_ and fusion_session_)
         for folder in os.listdir(project_folder):
-            if folder.startswith('session_'):
+            if folder.startswith('session_') or folder.startswith('fusion_session_'):
                 session_full_path = os.path.join(project_folder, folder)
                 if os.path.isdir(session_full_path):
+                    print(f"Found session folder: {folder}")
+                    
                     # Get input.json and shots.json if they exist
                     input_path = os.path.join(session_full_path, 'input.json')
                     shots_path = os.path.join(session_full_path, 'shots.json')
+                    output_path = os.path.join(session_full_path, 'output.json')
                     
-                    # Parse date from session folder name (e.g., session_20250612_165228_b967451b)
+                    # Parse date from session folder name (e.g., session_20250612_165228_b967451b or fusion_session_20250612_165228_b967451b)
                     created_at = datetime.now().isoformat()
                     
                     # Try to extract date from session folder name
                     try:
-                        date_part = folder.split('_')[1:3]  # Get date and time parts
+                        if folder.startswith('fusion_session_'):
+                            date_part = folder.split('_')[2:4]  # fusion_session_20250612_165228_b967451b
+                        else:
+                            date_part = folder.split('_')[1:3]  # session_20250612_165228_b967451b
                         date_str = f"{date_part[0][:4]}-{date_part[0][4:6]}-{date_part[0][6:]} {date_part[1][:2]}:{date_part[1][2:4]}:{date_part[1][4:]}"
                         created_at = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").isoformat()
                     except (IndexError, ValueError) as e:
                         print(f"Could not parse date from session name {folder}: {e}")
                         # Keep using the default created_at
+                    
+                    # Determine session type based on folder name and contents
+                    if folder.startswith('fusion_session_'):
+                        session_type = "image_fusion_session"
+                    elif os.path.exists(output_path):
+                        # Check if it's a fusion session based on output.json content
+                        try:
+                            with open(output_path, 'r') as f:
+                                output_data = json.load(f)
+                                if output_data.get('type') == 'image_fusion':
+                                    session_type = "image_fusion_session"
+                                else:
+                                    session_type = "shot_session"
+                        except (json.JSONDecodeError, IOError):
+                            session_type = "shot_session"
+                    else:
+                        session_type = "shot_session"
                     
                     session = {
                         "id": folder,
@@ -979,11 +1006,14 @@ def list_project_sessions(user_id, project_id):
                         "created_at": created_at,
                         "updated_at": created_at,
                         "project_id": project_id,
-                        "type": "filesystem",
+                        "type": session_type,
                         "has_input": os.path.exists(input_path),
-                        "has_shots": os.path.exists(shots_path)
+                        "has_shots": os.path.exists(shots_path),
+                        "has_output": os.path.exists(output_path)
                     }
                     sessions.append(session)
+        
+        print(f"Found {len(sessions)} sessions")
         
         # Sort by date (newest first)
         sessions.sort(key=lambda x: x['created_at'], reverse=True)
@@ -1205,12 +1235,13 @@ def save_fusion_session_to_project(user_id, project_id, final_prompt, generated_
                 print(f"Database: Error saving fusion session: {str(e)}")
                 conn.rollback()
                 return None
-        
-        # Return success data
+          # Return success data
         return {
             "session_id": session_id,
+            "session_name": session_name,
             "session_dir": session_dir,
             "images_dir": images_dir,
+            "image_filename": image_filename,
             "type": "image_fusion_session",
             "input_file": input_file_path,
             "output_file": output_file_path,

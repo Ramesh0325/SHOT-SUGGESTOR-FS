@@ -90,19 +90,36 @@ const ImageFusion = ({ projectId }) => {
             `http://localhost:8000/projects/${projectId}/sessions/${lastSession.id}/details`,
             { headers: { Authorization: `Bearer ${token}` } }
           );
-          
-          if (detailsResponse.ok) {
+            if (detailsResponse.ok) {
             const sessionData = await detailsResponse.json();
             
             // Restore fusion session state
-            if (sessionData.input_data?.prompt) {
-              setPrompt(sessionData.input_data.prompt);
+            if (sessionData.input_data?.final_prompt) {
+              setPrompt(sessionData.input_data.final_prompt);
+              setFinalPrompt(sessionData.input_data.final_prompt);
             }
-            if (sessionData.fusion_data?.generated_images) {
-              setGeneratedImages(sessionData.fusion_data.generated_images);
-              if (sessionData.fusion_data.generated_images.length > 0) {
-                setCurrentGeneratedImage(sessionData.fusion_data.generated_images[0]);
+            
+            // Load generated images from session
+            if (sessionData.image_files && sessionData.image_files.length > 0) {
+              const fusionImages = sessionData.image_files.map((imageFile, index) => ({
+                id: `fusion_${Date.now()}_${index}`,
+                image_url: `http://localhost:8000${imageFile.url}`,
+                prompt: sessionData.input_data?.final_prompt || sessionData.output_data?.final_prompt || 'Fusion image',
+                timestamp: sessionData.session?.created_at ? new Date(sessionData.session.created_at).toLocaleString() : 'Unknown'
+              }));
+              
+              setGeneratedImages(fusionImages);
+              if (fusionImages.length > 0) {
+                setCurrentGeneratedImage(fusionImages[0]);
               }
+              
+              console.log(`Loaded ${fusionImages.length} fusion images from session`);
+            }
+            
+            // Restore other session data if available
+            if (sessionData.output_data?.final_prompt) {
+              setFinalPrompt(sessionData.output_data.final_prompt);
+              setShowFinalPrompt(true);
             }
             
             console.log('Loaded previous fusion session:', sessionData);
@@ -339,12 +356,12 @@ const ImageFusion = ({ projectId }) => {
       setGenerationProgress('Processing generated image...');
 
       const data = await response.json();
-      
-      if (data.success && data.image_data) {
+        if (data.success && data.image_data) {
         // Add to generated images array with timestamp
         const newImage = {
           id: Date.now(),
           image: data.image_data,
+          image_url: data.image_url, // Add URL if available for persistence
           prompt: finalPrompt,
           timestamp: new Date().toLocaleString()
         };
@@ -357,6 +374,9 @@ const ImageFusion = ({ projectId }) => {
         setGenerationProgress('Generation complete!');
         
         console.log('Image generated successfully using final prompt');
+        if (data.image_url) {
+          console.log('Image saved to session and will persist:', data.image_url);
+        }
       } else {
         throw new Error(data.message || 'Failed to generate image');
       }
@@ -374,10 +394,28 @@ const ImageFusion = ({ projectId }) => {
         setProgressStep(0);
       }, 2000);
     }  };
-
   const handleDownload = (imageData = null) => {
     const imageToDownload = imageData || currentGeneratedImage?.image;
-    if (imageToDownload) {
+    const imageUrl = imageData ? null : currentGeneratedImage?.image_url;
+    
+    if (imageUrl) {
+      // For URL-based images, fetch and download
+      fetch(imageUrl)
+        .then(response => response.blob())
+        .then(blob => {
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `fusion-image-${Date.now()}.png`;
+          link.click();
+          window.URL.revokeObjectURL(url);
+        })
+        .catch(error => {
+          console.error('Error downloading image:', error);
+          setError('Failed to download image');
+        });
+    } else if (imageToDownload) {
+      // For base64 images
       const link = document.createElement('a');
       link.href = `data:image/png;base64,${imageToDownload}`;
       link.download = `fusion-image-${Date.now()}.png`;
@@ -981,10 +1019,9 @@ const ImageFusion = ({ projectId }) => {
                       borderColor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
                       boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
                     }
-                  }}>
-                    <CardMedia
+                  }}>                    <CardMedia
                       component="img"
-                      image={`data:image/png;base64,${imageObj.image}`}
+                      image={imageObj.image_url || `data:image/png;base64,${imageObj.image}`}
                       alt={`Generated image ${index + 1}`}
                       sx={{
                         height: 200,
@@ -993,7 +1030,7 @@ const ImageFusion = ({ projectId }) => {
                       }}
                       onClick={() => {
                         setCurrentGeneratedImage(imageObj);
-                        handlePreviewImage(`data:image/png;base64,${imageObj.image}`);
+                        handlePreviewImage(imageObj.image_url || `data:image/png;base64,${imageObj.image}`);
                       }}
                     />
                     <Box sx={{ p: 2 }}>
@@ -1004,12 +1041,19 @@ const ImageFusion = ({ projectId }) => {
                       }}>
                         Generated: {imageObj.timestamp}
                       </Typography>
-                      <Box sx={{ display: 'flex', gap: 1 }}>
-                        <Button
+                      <Box sx={{ display: 'flex', gap: 1 }}>                        <Button
                           size="small"
                           variant="contained"
                           startIcon={<Download />}
-                          onClick={() => handleDownload(imageObj.image)}
+                          onClick={() => {
+                            // Set as current image temporarily and download
+                            const prevCurrent = currentGeneratedImage;
+                            setCurrentGeneratedImage(imageObj);
+                            setTimeout(() => {
+                              handleDownload();
+                              setCurrentGeneratedImage(prevCurrent);
+                            }, 10);
+                          }}
                           sx={{
                             bgcolor: 'hsl(222.2, 47.4%, 11.2%)', // --primary
                             color: 'hsl(210, 40%, 98%)', // --primary-foreground
