@@ -26,6 +26,7 @@ import functools
 from datetime import datetime, timedelta
 import aiosqlite
 import colorsys
+from transformers import AutoTokenizer
 try:
     import cv2
 except ImportError:
@@ -54,6 +55,24 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# Add this helper at the top if not already present
+try:
+    from googletrans import Translator
+except ImportError:
+    Translator = None
+
+def translate_to_english(text):
+    if Translator is None:
+        logger.warning('googletrans is not installed, skipping translation.')
+        return text
+    try:
+        translator = Translator()
+        result = translator.translate(text, src='te', dest='en')
+        return result.text
+    except Exception as e:
+        logger.warning(f"Translation failed: {e}")
+        return text
 
 class RateLimiter:
     def __init__(self, requests_per_minute=15, requests_per_day=200):  # More conservative limits
@@ -858,6 +877,17 @@ def generate_fusion_image(
         
         # Generate the fused image with optimized parameters
         logger.info(f"Generating fused image with enhanced theme preservation... (strength: {optimal_strength}, guidance: {optimal_guidance}, steps: {optimal_steps})")
+        # --- Telugu-to-English translation for enhanced_prompt ---
+        logger.info(f"Prompt before translation: {enhanced_prompt}")
+        try:
+            lang = detect(enhanced_prompt)
+        except Exception:
+            lang = "en"
+        if lang == "te":
+            logger.info("Translating Telugu prompt to English for fusion image generation.")
+            enhanced_prompt = translate_to_english(enhanced_prompt)
+        logger.info(f"Prompt after translation: {enhanced_prompt}")
+        # --- End translation logic ---
         result = pipe(
             prompt=enhanced_prompt,
             negative_prompt=enhanced_negative_prompt,
@@ -1092,6 +1122,17 @@ def generate_reference_style_image(
         negative_prompt = "different style, different theme, inconsistent, blurry, low quality, distorted"
 
         # Use optimized parameters for better reference matching
+        # --- Telugu-to-English translation for enhanced_prompt ---
+        logger.info(f"Prompt before translation: {enhanced_prompt}")
+        try:
+            lang = detect(enhanced_prompt)
+        except Exception:
+            lang = "en"
+        if lang == "te":
+            logger.info("Translating Telugu prompt to English for reference style image.")
+            enhanced_prompt = translate_to_english(enhanced_prompt)
+        logger.info(f"Prompt after translation: {enhanced_prompt}")
+        # --- End translation logic ---
         result = pipe(
             prompt=enhanced_prompt,
             negative_prompt=negative_prompt,
@@ -1165,6 +1206,17 @@ def generate_identity_preserving_image(
         reference_image = reference_image.resize((512, 512), Image.Resampling.LANCZOS)
         
         # Generate image with identity preservation
+        # --- Telugu-to-English translation for prompt ---
+        logger.info(f"Prompt before translation: {prompt}")
+        try:
+            lang = detect(prompt)
+        except Exception:
+            lang = "en"
+        if lang == "te":
+            logger.info("Translating Telugu prompt to English for identity preserving image.")
+            prompt = translate_to_english(prompt)
+        logger.info(f"Prompt after translation: {prompt}")
+        # --- End translation logic ---
         result = pipe(
             prompt=prompt,
             ip_adapter_image=reference_image,
@@ -1227,6 +1279,17 @@ def generate_pose_transfer_image(
         negative_prompt = "different person, different face, blurry, low quality, distorted, deformed, multiple people"
         
         # Generate with lower strength to preserve identity
+        # --- Telugu-to-English translation for enhanced_prompt ---
+        logger.info(f"Prompt before translation: {enhanced_prompt}")
+        try:
+            lang = detect(enhanced_prompt)
+        except Exception:
+            lang = "en"
+        if lang == "te":
+            logger.info("Translating Telugu prompt to English for pose transfer image.")
+            enhanced_prompt = translate_to_english(enhanced_prompt)
+        logger.info(f"Prompt after translation: {enhanced_prompt}")
+        # --- End translation logic ---
         result = pipe(
             prompt=enhanced_prompt,
             negative_prompt=negative_prompt,
@@ -1346,6 +1409,17 @@ def generate_multi_view_fusion(
         logger.info(f"Generating multi-view fusion (strength: {optimal_strength}, guidance: {optimal_guidance})")
         
         # Generate with enhanced parameters
+        # --- Telugu-to-English translation for enhanced_prompt ---
+        logger.info(f"Prompt before translation: {enhanced_prompt}")
+        try:
+            lang = detect(enhanced_prompt)
+        except Exception:
+            lang = "en"
+        if lang == "te":
+            logger.info("Translating Telugu prompt to English for multi-view fusion.")
+            enhanced_prompt = translate_to_english(enhanced_prompt)
+        logger.info(f"Prompt after translation: {enhanced_prompt}")
+        # --- End translation logic ---
         result = pipe(
             prompt=enhanced_prompt,
             negative_prompt=enhanced_negative_prompt,
@@ -1639,22 +1713,35 @@ def _fallback_image_analysis(image: Image.Image) -> str:
 def merge_image_descriptions_with_prompt(image_descriptions: List[str], user_prompt: str) -> str:
     """
     Intelligently merge extracted image descriptions with user prompt to create
-    a cohesive generation prompt that preserves visual elements while incorporating the new angle.
-    
-    Args:
-        image_descriptions: List of detailed descriptions from reference images
-        user_prompt: User's desired viewpoint/angle prompt
-    
-    Returns:
-        Enhanced prompt optimized for accurate image generation
+    a single, natural, cinematic sentence for image generation.
+    Enforces a 77-token limit using a HuggingFace tokenizer.
     """
+    def postprocess_prompt(prompt: str) -> str:
+        import re
+        sentences = re.split(r'(?<=[.!?]) +', prompt)
+        seen = set()
+        unique_sentences = []
+        for s in sentences:
+            s_clean = s.strip().lower()
+            if s_clean and s_clean not in seen:
+                unique_sentences.append(s.strip())
+                seen.add(s_clean)
+        # Join as a single sentence
+        result = ' '.join(unique_sentences)
+        # Remove excessive commas, fix spacing
+        result = re.sub(r',\s*,+', ',', result)
+        result = re.sub(r'\s+,', ',', result)
+        result = re.sub(r',\s*\.', '.', result)
+        result = re.sub(r'\s+', ' ', result).strip()
+        # Truncate to the first period (single sentence)
+        first_period = result.find('.')
+        if first_period != -1:
+            result = result[:first_period+1]
+        return result
+
     try:
-        logger.info("Creating intelligent combined prompt...")
-        
-        # Combine all descriptions
+        logger.info("Creating intelligent combined prompt (single sentence)...")
         full_descriptions = " ".join(image_descriptions)
-        
-        # Use Gemini to intelligently extract and synthesize key visual elements
         synthesis_prompt = f"""
 You are creating an AI image generation prompt. Your task is to merge the user's specific request with key visual elements from reference images.
 
@@ -1665,119 +1752,85 @@ REFERENCE IMAGE DESCRIPTIONS (for visual style only):
 {full_descriptions}
 
 CRITICAL INSTRUCTIONS:
-1. START the prompt with the user's exact request/angle: "{user_prompt}"
-2. Then add only the 3-4 MOST distinctive visual elements from the reference images
-3. Keep the ENTIRE prompt under 75-100 words for optimal AI performance
-4. Focus on: character appearance, key props, lighting mood, and setting atmosphere
-5. Use concise, impactful descriptions
+1. DO NOT concatenate or list the user prompt and image descriptions.
+2. Write a SINGLE, natural, cinematic sentence that starts with the user's request and seamlessly weaves in only the 2-3 most distinctive visual elements from the reference images.
+3. Do NOT repeat phrases, do NOT use a blocky or list structure, do NOT use more than one sentence.
+4. The result must be a single, flowing, cinematic sentence under 77 tokens.
+5. Use concise, impactful, cinematic language.
 
 EXAMPLE FORMAT:
-"{user_prompt}. [Key character details]. [Essential props/clothing]. [Atmosphere/lighting]. [Setting type]. Cinematic quality."
+"{user_prompt}, [key visual/character/setting details] in a cinematic style."
 
-Create the optimized prompt now (75-100 words maximum):
+Create the optimized prompt now (ONE sentence, strictly under 77 tokens):
 """
-
         try:
-            # Use Gemini to create intelligent synthesis
             response = model.generate_content(synthesis_prompt)
             synthesized_prompt = response.text.strip()
-            
-            # Clean up the response (remove any formatting or extra text)
-            synthesized_prompt = re.sub(r'^.*?:', '', synthesized_prompt)  # Remove any leading labels
+            synthesized_prompt = re.sub(r'^.*?:', '', synthesized_prompt)
             synthesized_prompt = synthesized_prompt.replace('\n', ' ').strip()
-            
-            # Ensure optimal length for image generation (max 400 characters for focused model performance)
-            if len(synthesized_prompt) > 400:
-                # Truncate at last complete phrase before 400 chars
-                truncated = synthesized_prompt[:400]
-                last_comma = truncated.rfind(', ')
-                last_period = truncated.rfind('. ')
-                last_punct = max(last_comma, last_period)
-                if last_punct > 200:  # Ensure we don't truncate too much
-                    synthesized_prompt = truncated[:last_punct]
-                else:
-                    synthesized_prompt = truncated.rstrip(', .')
-            
-            logger.info(f"AI-synthesized optimized prompt ({len(synthesized_prompt)} chars): {synthesized_prompt}")
+            tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+            tokens = tokenizer.tokenize(synthesized_prompt)
+            if len(tokens) > 77:
+                truncated = tokenizer.convert_tokens_to_string(tokens[:77])
+                first_period = truncated.find('.')
+                if first_period != -1:
+                    truncated = truncated[:first_period+1]
+                synthesized_prompt = truncated.strip()
+            synthesized_prompt = postprocess_prompt(synthesized_prompt)
+            logger.info(f"AI-synthesized optimized prompt (single sentence, {len(tokens)} tokens): {synthesized_prompt}")
             return synthesized_prompt
-            
         except Exception as gemini_error:
             logger.warning(f"Gemini synthesis failed: {gemini_error}, using fallback method")
-            
-            # Fallback: Extract key elements manually with focused optimization
-            combined_text = full_descriptions.lower()
-            
-            # Extract key visual elements with priority focus
+            combined_text = ' '.join(image_descriptions).lower()
             key_elements = []
-            
-            # Environmental atmosphere (TOP PRIORITY - but concise)
             if any(word in combined_text for word in ['storm', 'cloud', 'overcast', 'dramatic sky']):
-                key_elements.append('stormy sky')
+                key_elements.append('under a stormy sky')
             if any(word in combined_text for word in ['rocky', 'mountain', 'terrain', 'battlefield']):
-                key_elements.append('rocky terrain')
+                key_elements.append('on rocky terrain')
             if any(word in combined_text for word in ['dark', 'moody', 'dramatic', 'harsh']):
-                key_elements.append('dramatic lighting')
-            
-            # Core character elements (ESSENTIAL ONLY)
+                key_elements.append('with dramatic lighting')
             armor_found = False
             for keyword in ["armor", "helmet", "shield", "breastplate"]:
                 if keyword in combined_text and not armor_found:
-                    key_elements.append('detailed armor')
+                    key_elements.append('wearing detailed armor')
                     armor_found = True
                     break
-            
-            # Weapons (SINGLE MOST PROMINENT)
             weapon_found = False
             for keyword in ["sword", "spear", "bow", "weapon"]:
                 if keyword in combined_text and not weapon_found:
-                    key_elements.append(f'{keyword}')
+                    key_elements.append(f'holding a {keyword}')
                     weapon_found = True
                     break
-            
-            # Key colors (MOST DISTINCTIVE ONLY)
             color_keywords = ['bronze', 'silver', 'gold', 'copper', 'metallic', 'brown', 'gray']
             for color in color_keywords:
                 if color in combined_text:
-                    key_elements.append(f'{color} tones')
-                    break  # Only include one primary color scheme
-            
-            # Character types (MAIN SUBJECT ONLY)
+                    key_elements.append(f'with {color} tones')
+                    break
             subject = "warrior"
             for keyword in ["knight", "soldier", "fighter", "hero"]:
                 if keyword in combined_text:
                     subject = keyword
                     break
-            
-            # Build focused, optimized prompt with user request as primary focus
-            preserved_elements = ", ".join(key_elements[:5])  # Limit to 5 most important elements
-            
-            # Ensure user's request is the absolute priority
-            if preserved_elements:
-                fallback_prompt = f"{user_prompt}. {subject} with {preserved_elements}. Cinematic composition, epic scale."
+            # Build a single, flowing sentence
+            details = ', '.join(key_elements[:3])
+            if details:
+                fallback_prompt = f"{user_prompt}, {subject} {details} in a cinematic style."
             else:
-                fallback_prompt = f"{user_prompt}. {subject} character. Cinematic composition, epic scale."
-            
-            # Ensure fallback is also within optimal length
-            if len(fallback_prompt) > 400:
-                # Simplify further while keeping user request intact
-                essential_elements = ", ".join(key_elements[:2])
-                if essential_elements:
-                    fallback_prompt = f"{user_prompt}. {subject} with {essential_elements}. Cinematic style."
-                else:
-                    fallback_prompt = f"{user_prompt}. {subject} character. Cinematic style."
-            
-            logger.info(f"Fallback optimized prompt ({len(fallback_prompt)} chars): {fallback_prompt}")
+                fallback_prompt = f"{user_prompt} in a cinematic style."
+            tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+            tokens = tokenizer.tokenize(fallback_prompt)
+            if len(tokens) > 77:
+                truncated = tokenizer.convert_tokens_to_string(tokens[:77])
+                first_period = truncated.find('.')
+                if first_period != -1:
+                    truncated = truncated[:first_period+1]
+                fallback_prompt = truncated.strip()
+            fallback_prompt = postprocess_prompt(fallback_prompt)
+            logger.info(f"Fallback optimized prompt (single sentence, {len(tokens)} tokens): {fallback_prompt}")
             return fallback_prompt
-        
     except Exception as e:
         logger.error(f"Error in intelligent prompt merging: {str(e)}")
-        # Always preserve user's request even in error cases
-        return f"{user_prompt}. Maintaining visual style from reference images. Cinematic quality."
-        
-    except Exception as e:
-        logger.error(f"Error merging descriptions with prompt: {str(e)}")
-        # Always preserve user's request even in error cases
-        return f"{user_prompt}. Maintaining visual style from reference images. Cinematic quality."
+        return f"{user_prompt} in a cinematic style."
 
 def generate_enhanced_negative_prompt(image_descriptions: List[str], base_negative: str) -> str:
     """
@@ -1875,6 +1928,17 @@ def generate_image_from_text_prompt(
         
         # Generate the image
         logger.info("Generating image...")
+        # --- Telugu-to-English translation for prompt ---
+        logger.info(f"Prompt before translation: {prompt}")
+        try:
+            lang = detect(prompt)
+        except Exception:
+            lang = "en"
+        if lang == "te":
+            logger.info("Translating Telugu prompt to English for text-to-image generation.")
+            prompt = translate_to_english(prompt)
+        logger.info(f"Prompt after translation: {prompt}")
+        # --- End translation logic ---
         with torch.no_grad():
             result = pipe(
                 prompt=prompt,

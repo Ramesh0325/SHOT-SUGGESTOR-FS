@@ -31,6 +31,11 @@ from io import BytesIO
 import torch
 import uuid
 from shutil import rmtree
+from langdetect import detect
+try:
+    from googletrans import Translator
+except ImportError:
+    Translator = None
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -1256,6 +1261,13 @@ async def get_project_session_details(
         logger.error(f"Error loading session details: {str(e)}")
         return JSONResponse(status_code=500, content={"detail": f"Failed to load session details: {str(e)}"})
 
+def translate_to_english(text):
+    if Translator is None:
+        raise ImportError('googletrans is not installed')
+    translator = Translator()
+    result = translator.translate(text, src='te', dest='en')
+    return result.text
+
 @app.post("/fusion/generate-image")
 async def fusion_generate_image_with_final_prompt(
     final_prompt: str = Form(...),
@@ -1269,22 +1281,27 @@ async def fusion_generate_image_with_final_prompt(
     try:
         logger.info(f"Fusion generate-image from user {current_user['username']}")
         logger.info(f"Final prompt: {final_prompt[:200]}...")
-        
         if not final_prompt.strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Final prompt cannot be empty"
             )
-        
-        # Import the function        # Generate image using text-to-image with the final prompt and optimized parameters
+        # Translate Telugu prompt to English if needed
+        try:
+            lang = detect(final_prompt)
+        except Exception:
+            lang = "en"
+        prompt_for_generation = final_prompt
+        if lang == "te":
+            logger.info("Translating Telugu prompt to English for image generation (main.py endpoint).")
+            prompt_for_generation = translate_to_english(final_prompt)
+        # Generate image using text-to-image with the final prompt and optimized parameters
         generated_image = generate_image_from_text_prompt(
-            prompt=final_prompt,
+            prompt=prompt_for_generation,
             num_inference_steps=30,  # Optimized for better speed/quality balance
             guidance_scale=8.0       # Better prompt following
         )
-        
         logger.info("Image generation completed successfully")
-        
         # Save the fusion session data to project if project_id is provided
         saved_data = None
         if project_id:
@@ -2242,15 +2259,14 @@ async def preview_combined_prompt(
     Combine user prompt and image descriptions for previewing the final prompt before generation.
     """
     import json
+    from model import merge_image_descriptions_with_prompt
     try:
         # Parse image descriptions
         descriptions = json.loads(image_descriptions)
         if not isinstance(descriptions, list):
             raise ValueError("image_descriptions must be a list of strings")
-        # Combine all descriptions into one string
-        combined_descriptions = ". ".join([desc for desc in descriptions if isinstance(desc, str)])
-        # Merge with user prompt
-        combined_prompt = f"{combined_descriptions}. {user_prompt}" if combined_descriptions else user_prompt
+        # Use the correct merging function
+        combined_prompt = merge_image_descriptions_with_prompt(descriptions, user_prompt)
         return {
             "combined_prompt": combined_prompt,
             "descriptions_used": descriptions,
