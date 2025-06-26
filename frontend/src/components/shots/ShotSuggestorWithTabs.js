@@ -38,6 +38,7 @@ import {
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
 import Projects from '../projects/Projects';
+import { BACKEND_HOST } from '../../config';
 
 const ShotSuggestorWithTabs = () => {
   // URL and navigation
@@ -104,7 +105,7 @@ const ShotSuggestorWithTabs = () => {
       console.log('Loading previous sessions for project:', selectedProject.id);
       console.log('Using token:', token ? `${token.substring(0, 20)}...` : 'null');
       
-      const response = await axios.get(`http://localhost:8000/projects/${selectedProject.id}/sessions`, {
+      const response = await axios.get(`${BACKEND_HOST}/projects/${selectedProject.id}/sessions`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -155,14 +156,14 @@ const ShotSuggestorWithTabs = () => {
     try {
       const token = localStorage.getItem('token');
       const detailsResponse = await axios.get(
-        `http://localhost:8000/projects/${selectedProject.id}/sessions/${session.id}/details`,
+        `${BACKEND_HOST}/projects/${selectedProject.id}/sessions/${session.id}/details`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       
       if (detailsResponse.data.shots_data?.shots) {
         const shotsWithImages = detailsResponse.data.shots_data.shots.map(shot => ({
           ...shot,
-          image_url: shot.image_url ? `http://localhost:8000${shot.image_url}` : shot.image_url
+          image_url: shot.image_url ? `${BACKEND_HOST}${shot.image_url}` : shot.image_url
         }));
         setShots(shotsWithImages);
         setSessionInfo({ id: session.id, ...detailsResponse.data.session });
@@ -194,7 +195,7 @@ const ShotSuggestorWithTabs = () => {
       }
       
       console.log('Fetching sessions for project:', selectedProject.id);
-      const response = await axios.get(`http://localhost:8000/projects/${selectedProject.id}/sessions`, {
+      const response = await axios.get(`${BACKEND_HOST}/projects/${selectedProject.id}/sessions`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -216,7 +217,7 @@ const ShotSuggestorWithTabs = () => {
         
         // Load the session details
         const detailsResponse = await axios.get(
-          `http://localhost:8000/projects/${selectedProject.id}/sessions/${lastSession.id}/details`,
+          `${BACKEND_HOST}/projects/${selectedProject.id}/sessions/${lastSession.id}/details`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         
@@ -225,7 +226,7 @@ const ShotSuggestorWithTabs = () => {
         if (detailsResponse.data.shots_data?.shots) {
           const shotsWithImages = detailsResponse.data.shots_data.shots.map(shot => ({
             ...shot,
-            image_url: shot.image_url ? `http://localhost:8000${shot.image_url}` : shot.image_url
+            image_url: shot.image_url ? `${BACKEND_HOST}${shot.image_url}` : shot.image_url
           }));
           setShots(shotsWithImages);
           setSessionInfo({ id: lastSession.id, ...detailsResponse.data.session });
@@ -272,7 +273,7 @@ const ShotSuggestorWithTabs = () => {
       }
       
       console.log('Loading project with ID:', projectId);
-      const response = await axios.get(`http://localhost:8000/projects/${projectId}`, {
+      const response = await axios.get(`${BACKEND_HOST}/projects/${projectId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       console.log('Project loaded successfully:', response.data);
@@ -342,7 +343,7 @@ const ShotSuggestorWithTabs = () => {
       console.log('Using token for delete:', token ? 'Present' : 'Missing');
       
       const response = await axios.delete(
-        `http://localhost:8000/projects/${selectedProject.id}/sessions/${sessionToDelete.id}`,
+        `${BACKEND_HOST}/projects/${selectedProject.id}/sessions/${sessionToDelete.id}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       
@@ -409,7 +410,7 @@ const ShotSuggestorWithTabs = () => {
       };
 
       const response = await axios.post(
-        `http://localhost:8000/shots/suggest?project_id=${selectedProject.id}`,
+        `${BACKEND_HOST}/shots/suggest?project_id=${selectedProject.id}`,
         requestData,
         {
           headers: {
@@ -457,7 +458,7 @@ const ShotSuggestorWithTabs = () => {
         formData.append('shot_index', shotIndex.toString());
       }
 
-      const response = await axios.post('http://localhost:8000/shots/generate-image', formData, {
+      const response = await axios.post(`${BACKEND_HOST}/shots/generate-image`, formData, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
           'Content-Type': 'multipart/form-data'

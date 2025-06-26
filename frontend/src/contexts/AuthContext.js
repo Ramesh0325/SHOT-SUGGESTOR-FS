@@ -1,5 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import axios from 'axios';
+import { BACKEND_HOST } from '../config';
 
 const AuthContext = createContext(null);
 
@@ -31,7 +32,7 @@ export const AuthProvider = ({ children }) => {
       }
 
       console.log('Checking auth status with token:', token.substring(0, 10) + '...');
-      const response = await axios.get('http://localhost:8000/me', {
+      const response = await axios.get(`${BACKEND_HOST}/me`, {
         headers: { 
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json'
@@ -67,7 +68,7 @@ export const AuthProvider = ({ children }) => {
       formData.append('username', username);
       formData.append('password', password);
 
-      const response = await axios.post('http://localhost:8000/token', formData);
+      const response = await axios.post(`${BACKEND_HOST}/token`, formData);
       const { access_token, user: userData } = response.data;
       
       console.log('Login successful, saving token');
@@ -85,7 +86,7 @@ export const AuthProvider = ({ children }) => {
   const register = async (username, password) => {
     try {
       setError(null);
-      const response = await axios.post('http://localhost:8000/register', {
+      const response = await axios.post(`${BACKEND_HOST}/register`, {
         username,
         password,
         confirm_password: password

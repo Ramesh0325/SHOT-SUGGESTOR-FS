@@ -38,6 +38,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import Stepper from '@mui/material/Stepper';
 import Step from '@mui/material/Step';
 import StepLabel from '@mui/material/StepLabel';
+import { BACKEND_HOST } from '../../config';
 
 const ImageFusion = ({ projectId }) => {
   const auth = useAuth();
@@ -73,7 +74,7 @@ const ImageFusion = ({ projectId }) => {
     if (projectId && token) {
       setFusionSessionsLoading(true);
       setFusionSessionsError('');
-      fetch(`http://localhost:8000/projects/${projectId}/sessions`, {
+      fetch(`${BACKEND_HOST}/projects/${projectId}/sessions`, {
         headers: { Authorization: `Bearer ${token}` }
       })
         .then(res => res.json())
@@ -93,7 +94,7 @@ const ImageFusion = ({ projectId }) => {
 
   const loadLastFusionSession = async () => {
     try {
-      const response = await fetch(`http://localhost:8000/projects/${projectId}/sessions`, {
+      const response = await fetch(`${BACKEND_HOST}/projects/${projectId}/sessions`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -112,7 +113,7 @@ const ImageFusion = ({ projectId }) => {
           
           // Load the session details
           const detailsResponse = await fetch(
-            `http://localhost:8000/projects/${projectId}/sessions/${lastSession.id}/details`,
+            `${BACKEND_HOST}/projects/${projectId}/sessions/${lastSession.id}/details`,
             { headers: { Authorization: `Bearer ${token}` } }
           );
             if (detailsResponse.ok) {
@@ -128,7 +129,7 @@ const ImageFusion = ({ projectId }) => {
             if (sessionData.image_files && sessionData.image_files.length > 0) {
               const fusionImages = sessionData.image_files.map((imageFile, index) => ({
                 id: `fusion_${Date.now()}_${index}`,
-                image_url: `http://localhost:8000${imageFile.url}`,
+                image_url: `${BACKEND_HOST}${imageFile.url}`,
                 prompt: sessionData.input_data?.final_prompt || sessionData.output_data?.final_prompt || 'Fusion image',
                 timestamp: sessionData.session?.created_at ? new Date(sessionData.session.created_at).toLocaleString() : 'Unknown'
               }));
@@ -224,7 +225,7 @@ const ImageFusion = ({ projectId }) => {
         formData.append('files', imageObj.file);
       });
 
-      const response = await fetch('http://localhost:8000/api/analyze-images', {
+      const response = await fetch(`${BACKEND_HOST}/api/analyze-images`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -280,7 +281,7 @@ const ImageFusion = ({ projectId }) => {
       formData.append('user_prompt', prompt);
       formData.append('image_descriptions', JSON.stringify(successfulDescriptions));
 
-      const response = await fetch('http://localhost:8000/api/preview-combined-prompt', {
+      const response = await fetch(`${BACKEND_HOST}/api/preview-combined-prompt`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -341,7 +342,7 @@ const ImageFusion = ({ projectId }) => {
       console.log('Sending final prompt to backend:', finalPrompt);
 
       // Use text-to-image generation with the final prompt
-      const response = await fetch('http://localhost:8000/fusion/generate-image', {
+      const response = await fetch(`${BACKEND_HOST}/fusion/generate-image`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -462,7 +463,7 @@ const ImageFusion = ({ projectId }) => {
     try {
       const token = auth?.token;
       const response = await axios.post(
-        `http://localhost:8000/projects/${projectId}/fusion/start-session`,
+        `${BACKEND_HOST}/projects/${projectId}/fusion/start-session`,
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -491,7 +492,7 @@ const ImageFusion = ({ projectId }) => {
   const confirmDeleteSession = async () => {
     if (!sessionToDelete) return;
     try {
-      await fetch(`http://localhost:8000/projects/${projectId}/sessions/${sessionToDelete.name || sessionToDelete.id}`, {
+      await fetch(`${BACKEND_HOST}/projects/${projectId}/sessions/${sessionToDelete.name || sessionToDelete.id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -518,7 +519,7 @@ const ImageFusion = ({ projectId }) => {
       setActiveSessionId(session.id || session.name);
       // Fetch session details
       const detailsResponse = await fetch(
-        `http://localhost:8000/projects/${projectId}/sessions/${session.id || session.name}/details`,
+        `${BACKEND_HOST}/projects/${projectId}/sessions/${session.id || session.name}/details`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (detailsResponse.ok) {
@@ -541,7 +542,7 @@ const ImageFusion = ({ projectId }) => {
         if (sessionData.image_files && sessionData.image_files.length > 0) {
           const fusionImages = sessionData.image_files.map((imageFile, index) => ({
             id: `fusion_${Date.now()}_${index}`,
-            image_url: `http://localhost:8000${imageFile.url}`,
+            image_url: `${BACKEND_HOST}${imageFile.url}`,
             prompt: sessionData.input_data?.final_prompt || sessionData.output_data?.final_prompt || 'Fusion image',
             timestamp: sessionData.session?.created_at ? new Date(sessionData.session.created_at).toLocaleString() : 'Unknown'
           }));

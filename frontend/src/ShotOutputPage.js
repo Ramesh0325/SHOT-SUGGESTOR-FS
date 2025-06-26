@@ -18,6 +18,7 @@ import {
 import axios from 'axios';
 import { useAuth } from './contexts/AuthContext';
 import DownloadIcon from '@mui/icons-material/Download';
+import { BACKEND_HOST } from './config';
 
 const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, handleGenerateImage }) => {
   const { sessionId } = useParams();
@@ -72,13 +73,13 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
       // Try to fetch as filesystem session first, then as database session
       let response;
       try {
-        response = await axios.get(`http://localhost:8000/sessions/${sessionId}`, {
+        response = await axios.get(`${BACKEND_HOST}/sessions/${sessionId}`, {
           params: { session_type: 'filesystem' },
           headers: { Authorization: `Bearer ${token}` }
         });
       } catch (err) {
         // If not found, try as database session
-        response = await axios.get(`http://localhost:8000/sessions/${sessionId}`, {
+        response = await axios.get(`${BACKEND_HOST}/sessions/${sessionId}`, {
           headers: { Authorization: `Bearer ${token}` }
         });
       }
@@ -133,7 +134,7 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
         shot_index: index
       });
 
-      const response = await axios.post('http://localhost:8000/shots/generate-image', 
+      const response = await axios.post(`${BACKEND_HOST}/shots/generate-image`, 
         formData, 
         { headers: { 'Authorization': `Bearer ${token}` } }
       );
@@ -224,7 +225,7 @@ const ShotOutputPage = ({ shots: propShots, images: propImages, shotLoading, han
                 {propImages[idx] && (
                   <img
                     className="shot-img"
-                    src={propImages[idx].startsWith('data:image') ? propImages[idx] : `data:image/png;base64,${propImages[idx]}`}
+                    src={propImages[idx].startsWith('data:image') ? propImages[idx] : `${BACKEND_HOST}${propImages[idx]}`}
                     alt={`Shot ${idx + 1}`}
                   />
                 )}

@@ -38,6 +38,7 @@ import AddIcon from '@mui/icons-material/Add';
 import NoPhotographyIcon from '@mui/icons-material/NoPhotography';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
+import { BACKEND_HOST } from '../../config';
 
 const ProjectDetail = () => {
   const { projectId } = useParams();
@@ -97,7 +98,7 @@ const ProjectDetail = () => {
   const fetchProjectDetails = async () => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`http://localhost:8000/projects/${projectId}`, {
+      const response = await axios.get(`${BACKEND_HOST}/projects/${projectId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setProject(response.data);
@@ -110,7 +111,7 @@ const ProjectDetail = () => {
   const fetchProjectShots = async () => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`http://localhost:8000/projects/${projectId}/shots`, {
+      const response = await axios.get(`${BACKEND_HOST}/projects/${projectId}/shots`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setShots(response.data);
@@ -131,7 +132,7 @@ const ProjectDetail = () => {
     try {
       setSessionsLoading(true);
       const token = localStorage.getItem('token');
-      const response = await axios.get(`http://localhost:8000/projects/${projectId}/sessions`, {
+      const response = await axios.get(`${BACKEND_HOST}/projects/${projectId}/sessions`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setSessions(response.data || []);
@@ -163,7 +164,7 @@ const ProjectDetail = () => {
       
       // Get shot suggestions only (do not save to backend)
       const response = await axios.post(
-        `http://localhost:8000/shots/suggest?project_id=${projectId}`,
+        `${BACKEND_HOST}/shots/suggest?project_id=${projectId}`,
         {
           scene_description: newShot.scene_description,
           num_shots: newShot.num_shots,
@@ -258,7 +259,7 @@ const ProjectDetail = () => {
 
       console.log('Generating image for shot:', shot.id);
       const response = await axios.post(
-        'http://localhost:8000/shots/generate-image',
+        `${BACKEND_HOST}/shots/generate-image`,
         formData,
         {
           headers: {
@@ -284,7 +285,7 @@ const ProjectDetail = () => {
 
         // Fetch shot versions
         const versionsResponse = await axios.get(
-          `http://localhost:8000/shots/${shot.id}/versions`,
+          `${BACKEND_HOST}/shots/${shot.id}/versions`,
           {
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -325,7 +326,7 @@ const ProjectDetail = () => {
     try {
       const token = localStorage.getItem('token');
       const response = await axios.get(
-        `http://localhost:8000/shots/${shotId}/versions`,
+        `${BACKEND_HOST}/shots/${shotId}/versions`,
         {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -363,7 +364,7 @@ const ProjectDetail = () => {
 
       console.log('Deleting shot:', shotToDelete.id);
       const response = await axios.delete(
-        `http://localhost:8000/shots/${shotToDelete.id}`,
+        `${BACKEND_HOST}/shots/${shotToDelete.id}`,
         {
           headers: { 
             Authorization: `Bearer ${token}`,
@@ -456,7 +457,7 @@ const ProjectDetail = () => {
 
       console.log('Deleting project:', projectToDelete.id);
       const response = await axios.delete(
-        `http://localhost:8000/projects/${projectToDelete.id}`,
+        `${BACKEND_HOST}/projects/${projectToDelete.id}`,
         {
           headers: { 
             Authorization: `Bearer ${token}`,
@@ -530,7 +531,7 @@ const ProjectDetail = () => {
       
       // Create a blank session for this project
       const response = await axios.post(
-        `http://localhost:8000/sessions`,
+        `${BACKEND_HOST}/sessions`,
         {
           name: selectedSession.name,
           data: {
@@ -859,7 +860,7 @@ const ProjectDetail = () => {
                       <CardMedia
                         component="img"
                         height="200"
-                        image={shot.image_url}
+                        image={`${BACKEND_HOST}${shot.image_url}`}
                         alt={`Shot ${shot.shot_number} (v${shot.version_number})`}
                         sx={{ 
                           objectFit: 'cover',
@@ -983,7 +984,7 @@ const ProjectDetail = () => {
                     <CardMedia
                       component="img"
                       height="200"
-                      image={shot.image_url}
+                      image={`${BACKEND_HOST}${shot.image_url}`}
                       alt={`Shot ${shot.shot_number} (v${shot.version_number || 1})`}
                       sx={{ 
                         objectFit: 'cover',
@@ -1118,7 +1119,7 @@ const ProjectDetail = () => {
                           {version.image_url && (
                             <Box sx={{ ml: 2 }}>
                               <img
-                                src={version.image_url}
+                                src={`${BACKEND_HOST}${version.image_url}`}
                                 alt={`Version ${version.version_number}`}
                                 style={{ width: 100, height: 100, objectFit: 'cover' }}
                               />

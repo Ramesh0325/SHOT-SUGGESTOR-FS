@@ -48,7 +48,6 @@ load_dotenv()
 SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"  # This is a test key, replace in production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
-FRONTEND_URL = "http://localhost:3000"
 
 # Validate required environment variables
 if not SECRET_KEY:
@@ -66,10 +65,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Add these at the top after imports and dotenv
+FRONTEND_HOST = os.getenv('FRONTEND_HOST', 'http://localhost:3000')
+BACKEND_HOST = os.getenv('BACKEND_HOST', 'http://localhost:8000')
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Allow both ports
+    allow_origins=[FRONTEND_HOST, FRONTEND_HOST.replace('3000', '3001')],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,7 +81,7 @@ app.add_middleware(
 # Add OPTIONS endpoint for CORS preflight
 @app.options("/{full_path:path}")
 async def options_handler(request: Request, full_path: str):
-    origin = request.headers.get("origin", "http://localhost:3000")
+    origin = request.headers.get("origin", FRONTEND_HOST)
     return JSONResponse(
         content={},
         headers={
@@ -277,7 +280,7 @@ async def register(user: UserCreate):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"detail": "Username and password are required"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -288,7 +291,7 @@ async def register(user: UserCreate):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"detail": "Passwords do not match"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -304,7 +307,7 @@ async def register(user: UserCreate):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"detail": "Username already taken"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -316,7 +319,7 @@ async def register(user: UserCreate):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={"detail": "Failed to retrieve created user"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -329,7 +332,7 @@ async def register(user: UserCreate):
                 "username": created_user["username"]
             },
             headers={
-                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Origin": FRONTEND_HOST,
                 "Access-Control-Allow-Credentials": "true"
             }
         )
@@ -338,7 +341,7 @@ async def register(user: UserCreate):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": f"Registration failed: {str(e)}"},
             headers={
-                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Origin": FRONTEND_HOST,
                 "Access-Control-Allow-Credentials": "true"
             }
         )
@@ -396,7 +399,7 @@ async def get_project_details(
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={"detail": "Project not found"},
                 headers={
-                    "Access-Control-Allow-Origin": request.headers.get("origin", "http://localhost:3000"),
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true",
                     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
                     "Access-Control-Allow-Headers": "*"
@@ -409,7 +412,7 @@ async def get_project_details(
                 status_code=status.HTTP_403_FORBIDDEN,
                 content={"detail": "Not authorized to access this project"},
                 headers={
-                    "Access-Control-Allow-Origin": request.headers.get("origin", "http://localhost:3000"),
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true",
                     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
                     "Access-Control-Allow-Headers": "*"
@@ -423,7 +426,7 @@ async def get_project_details(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": f"Internal server error: {str(e)}"},
             headers={
-                "Access-Control-Allow-Origin": request.headers.get("origin", "http://localhost:3000"),
+                "Access-Control-Allow-Origin": FRONTEND_HOST,
                 "Access-Control-Allow-Credentials": "true",
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
                 "Access-Control-Allow-Headers": "*"
@@ -444,7 +447,7 @@ async def remove_project(
             return JSONResponse(
                 content={},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -459,7 +462,7 @@ async def remove_project(
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={"detail": "Project not found"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -470,7 +473,7 @@ async def remove_project(
                 status_code=status.HTTP_403_FORBIDDEN,
                 content={"detail": "Not authorized to delete this project"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -486,7 +489,7 @@ async def remove_project(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content={"detail": "Project was already deleted"},
                     headers={
-                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Origin": FRONTEND_HOST,
                         "Access-Control-Allow-Credentials": "true"
                     }
                 )
@@ -498,7 +501,7 @@ async def remove_project(
             return JSONResponse(
                 content={"message": "Project deleted successfully"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -509,7 +512,7 @@ async def remove_project(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={"detail": f"Database error: {str(e)}"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -520,7 +523,7 @@ async def remove_project(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": f"Error deleting project: {str(e)}"},
             headers={
-                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Origin": FRONTEND_HOST,
                 "Access-Control-Allow-Credentials": "true"
             }
         )
@@ -756,7 +759,7 @@ async def generate_shot_image_endpoint(
                         response["saved_to_project"] = True
                         response["image_file_path"] = image_path
                         response["image_filename"] = image_filename
-                        response["image_url"] = f"http://localhost:8000{relative_image_path}"  # Update URL to point to saved image
+                        response["image_url"] = f"{BACKEND_HOST}{relative_image_path}"  # Update URL to point to saved image
                         logger.info(f"Shot image saved to session: {image_path}")
                         
                         # Update shots.json file with the image information
@@ -940,7 +943,7 @@ async def remove_shot(
             return JSONResponse(
                 content={},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -955,7 +958,7 @@ async def remove_shot(
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={"detail": "Shot not found"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -970,7 +973,7 @@ async def remove_shot(
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={"detail": "Project not found"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -981,7 +984,7 @@ async def remove_shot(
                 status_code=status.HTTP_403_FORBIDDEN,
                 content={"detail": "Not authorized to delete this shot"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -997,7 +1000,7 @@ async def remove_shot(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content={"detail": "Shot was already deleted"},
                     headers={
-                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Origin": FRONTEND_HOST,
                         "Access-Control-Allow-Credentials": "true"
                     }
                 )
@@ -1009,7 +1012,7 @@ async def remove_shot(
                 return JSONResponse(
                     content={"message": "Shot deleted successfully"},
                     headers={
-                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Origin": FRONTEND_HOST,
                         "Access-Control-Allow-Credentials": "true"
                     }
                 )
@@ -1019,7 +1022,7 @@ async def remove_shot(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     content={"detail": "Failed to delete shot from database"},
                     headers={
-                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Origin": FRONTEND_HOST,
                         "Access-Control-Allow-Credentials": "true"
                     }
                 )
@@ -1029,7 +1032,7 @@ async def remove_shot(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={"detail": f"Database error: {str(e)}"},
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Origin": FRONTEND_HOST,
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
@@ -1040,7 +1043,7 @@ async def remove_shot(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": f"Error deleting shot: {str(e)}"},
             headers={
-                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Origin": FRONTEND_HOST,
                 "Access-Control-Allow-Credentials": "true"
             }
         )
@@ -1336,7 +1339,7 @@ async def fusion_generate_image_with_final_prompt(
                 "images_dir": saved_data["images_dir"]
             }
             if saved_data.get("image_filename"):
-                response_data["image_url"] = f"http://localhost:8000/projects/{project_id}/sessions/{saved_data['session_name']}/images/{saved_data['image_filename']}"
+                response_data["image_url"] = f"{BACKEND_HOST}/projects/{project_id}/sessions/{saved_data['session_name']}/images/{saved_data['image_filename']}"
         return response_data
         
     except Exception as e:

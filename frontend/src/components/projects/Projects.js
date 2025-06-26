@@ -25,6 +25,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
+import { BACKEND_HOST } from '../../config';
 
 const Projects = ({ projectType = "shot-suggestion", onProjectSelect, hideHeader = false }) => {
   const [projects, setProjects] = useState([]);
@@ -41,7 +42,7 @@ const Projects = ({ projectType = "shot-suggestion", onProjectSelect, hideHeader
   const fetchProjects = async () => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get('http://localhost:8000/projects', {
+      const response = await axios.get(`${BACKEND_HOST}/projects`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       // Filter projects by type
@@ -56,7 +57,7 @@ const Projects = ({ projectType = "shot-suggestion", onProjectSelect, hideHeader
   const handleCreateProject = async () => {
     try {
       const token = localStorage.getItem('token');
-      await axios.post('http://localhost:8000/projects', 
+      await axios.post(`${BACKEND_HOST}/projects`, 
         {
           name: newProject.name,
           description: newProject.description,
@@ -89,7 +90,7 @@ const Projects = ({ projectType = "shot-suggestion", onProjectSelect, hideHeader
 
     try {
       const token = localStorage.getItem('token');
-      await axios.delete(`http://localhost:8000/projects/${projectToDelete.id}`, {
+      await axios.delete(`${BACKEND_HOST}/projects/${projectToDelete.id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       fetchProjects();

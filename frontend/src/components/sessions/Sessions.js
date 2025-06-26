@@ -4,6 +4,7 @@ import {
   Container, Typography, Box, Paper, List, ListItem, ListItemText, CircularProgress, Button, Chip, Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
 import axios from 'axios';
+import { BACKEND_HOST } from '../../config';
 
 const Sessions = ({ projectType = "shot-suggestion", projectId = null }) => {
   const [sessions, setSessions] = useState([]);
@@ -22,7 +23,7 @@ const Sessions = ({ projectType = "shot-suggestion", projectId = null }) => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`http://localhost:8000/projects/${projectId}/sessions`, {
+      const response = await axios.get(`${BACKEND_HOST}/projects/${projectId}/sessions`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setSessions(response.data || []);
@@ -42,7 +43,7 @@ const Sessions = ({ projectType = "shot-suggestion", projectId = null }) => {
     if (!sessionToDelete) return;
     try {
       const token = localStorage.getItem('token');
-      await axios.delete(`http://localhost:8000/projects/${projectId}/sessions/${sessionToDelete.name}`, {
+      await axios.delete(`${BACKEND_HOST}/projects/${projectId}/sessions/${sessionToDelete.name}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setDeleteDialogOpen(false);
