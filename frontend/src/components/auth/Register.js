@@ -29,7 +29,6 @@ import { useAuth } from '../../contexts/AuthContext';
 
 const Register = () => {
   const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -46,7 +45,7 @@ const Register = () => {
     }
     
     setLoading(true);
-    const success = await register(username, email, password);
+    const success = await register(username, password, confirmPassword);
     if (success) {
       navigate('/dashboard');
     }
@@ -232,17 +231,6 @@ const Register = () => {
                       variant="outlined"
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      required
-                      sx={{ mb: 3 }}
-                    />
-
-                    <TextField
-                      fullWidth
-                      label="Email"
-                      type="email"
-                      variant="outlined"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
                       required
                       sx={{ mb: 3 }}
                     />

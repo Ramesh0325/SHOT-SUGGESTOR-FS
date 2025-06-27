@@ -11,7 +11,7 @@ import shutil
 import time
 import threading
 import contextlib
-from passlib.context import CryptContext
+import bcrypt
 
 # Get the absolute path to the database file
 DB_FILE = os.path.join(os.path.dirname(__file__), "shots_app.db")
@@ -23,14 +23,28 @@ _connection_pool = None
 _connection_lock = threading.Lock()
 _connection_count = 0
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
+# Password hashing functions using bcrypt
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a plain password against a hashed one."""
+    try:
+        # bcrypt requires bytes, so encode both
+        password_bytes = plain_password.encode('utf-8')
+        hashed_password_bytes = hashed_password.encode('utf-8')
+        # checkpw returns True if they match
+        return bcrypt.checkpw(password_bytes, hashed_password_bytes)
+    except (ValueError, TypeError) as e:
+        print(f"Error verifying password: {e}")
+        return False
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    """Hash a password for storing."""
+    # bcrypt requires bytes, so encode the password
+    password_bytes = password.encode('utf-8')
+    # Generate a salt and hash the password
+    salt = bcrypt.gensalt()
+    hashed_password = bcrypt.hashpw(password_bytes, salt)
+    # Return the hash as a string to store in the DB
+    return hashed_password.decode('utf-8')
 
 @contextlib.contextmanager
 def get_db_connection():
@@ -230,6 +244,7 @@ def create_user(username, password):
     """Create a new user account with a securely hashed password"""
     user_id = str(uuid.uuid4())
     password_hash = get_password_hash(password)
+    print(f"DEBUG: Registering user '{username}' with hash starting with: {password_hash[:10]}")
     try:
         with get_db_connection() as conn:
             conn.execute(
@@ -252,9 +267,18 @@ def authenticate_user(username, password):
     """Authenticate a user by username and password"""
     user = get_user_by_username(username)
     if not user:
+        print(f"DEBUG: Authentication failed: User '{username}' not found.")
         return None
-    if not verify_password(password, user["password_hash"]):
+    
+    print(f"DEBUG: Authenticating user '{username}'. Retrieved hash starts with: {user['password_hash'][:10]}")
+    
+    is_verified = verify_password(password, user["password_hash"])
+    
+    if not is_verified:
+        print(f"DEBUG: Password verification failed for user '{username}'.")
         return None
+        
+    print(f"DEBUG: Authentication successful for user '{username}'.")
     return user
 
 def get_user_by_id(user_id):

@@ -83,13 +83,13 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const register = async (username, password) => {
+  const register = async (username, password, confirm_password) => {
     try {
       setError(null);
       const response = await axios.post(`${BACKEND_HOST}/register`, {
         username,
         password,
-        confirm_password: password
+        confirm_password
       });
       return true;
     } catch (err) {
