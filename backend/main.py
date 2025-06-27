@@ -555,53 +555,24 @@ async def suggest_shots(
         if project_id:
             input_data["project_id"] = project_id
             logger.info(f"Using project_id: {project_id} for session")
+            # Save to file system and get session info
+            session_info = save_enhanced_shots_to_project(
+                user_id=current_user["id"],
+                project_id=project_id,
+                session_data=input_data,
+                shots_data=shot_suggestions
+            )
+        else:
+            session_info = {}
+
           # Create a response object with the right format
         response_data = {
-            "suggestions": shot_suggestions
+            "suggestions": shot_suggestions,
+            "session_info": session_info
         }
         
-        try:
-            # Use enhanced project structure if project_id is provided
-            if project_id:
-                # Save to enhanced project structure
-                enhanced_session = save_enhanced_shots_to_project(
-                    user_id=current_user["id"],
-                    project_id=project_id,
-                    session_data=input_data,
-                    shots_data=shot_suggestions
-                )
-                
-                if enhanced_session:
-                    response_data["session_info"] = {
-                        "id": enhanced_session["session_id"],
-                        "folder_path": enhanced_session["session_dir"],
-                        "images_dir": enhanced_session["images_dir"],
-                        "type": "enhanced_project_session"
-                    }
-                    logger.info(f"Successfully saved shots to enhanced project structure: {enhanced_session}")
-                else:
-                    logger.error("Failed to save to enhanced project structure")
-            else:
-                # Fallback to filesystem session for non-project shots
-                fs_session = save_shots_to_filesystem(
-                    user_id=current_user["id"],
-                    session_data=input_data,
-                    shots_data=shot_suggestions,
-                    project_id=None
-                )
-                
-                if fs_session:
-                    response_data["session_info"] = {
-                        "id": fs_session["session_id"],
-                        "folder_path": fs_session["folder_path"],
-                        "type": "filesystem_session"
-                    }
-                    logger.info(f"Successfully saved shots to filesystem: {fs_session}")
-        except Exception as e:
-            # Log the error but continue - we still want to return the suggestions
-            logger.error(f"Error saving shots: {str(e)}")
-            
-        return response_data  # Return structured response with suggestions
+        return JSONResponse(content=response_data)
+        
     except Exception as e:
         logger.error(f"Error in suggest_shots: {str(e)}")
         if "quota" in str(e).lower():

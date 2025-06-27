@@ -11,6 +11,7 @@ import shutil
 import time
 import threading
 import contextlib
+from passlib.context import CryptContext
 
 # Get the absolute path to the database file
 DB_FILE = os.path.join(os.path.dirname(__file__), "shots_app.db")
@@ -21,6 +22,15 @@ PROJECT_IMAGES_ROOT = os.path.join(os.path.dirname(__file__), 'project_images')
 _connection_pool = None
 _connection_lock = threading.Lock()
 _connection_count = 0
+
+# Password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
 @contextlib.contextmanager
 def get_db_connection():
@@ -217,9 +227,9 @@ def init_db():
 
 # User management functions
 def create_user(username, password):
-    """Create a new user account with just username and password"""
+    """Create a new user account with a securely hashed password"""
     user_id = str(uuid.uuid4())
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    password_hash = get_password_hash(password)
     try:
         with get_db_connection() as conn:
             conn.execute(
@@ -240,13 +250,12 @@ def create_user(username, password):
 
 def authenticate_user(username, password):
     """Authenticate a user by username and password"""
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
-    with get_db_connection() as conn:
-        user = conn.execute(
-            "SELECT * FROM users WHERE username = ? AND password_hash = ?",
-            (username, password_hash)
-        ).fetchone()
-        return dict(user) if user else None
+    user = get_user_by_username(username)
+    if not user:
+        return None
+    if not verify_password(password, user["password_hash"]):
+        return None
+    return user
 
 def get_user_by_id(user_id):
     """Get user by ID"""

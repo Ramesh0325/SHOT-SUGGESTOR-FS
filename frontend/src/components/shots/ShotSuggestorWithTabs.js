@@ -422,8 +422,11 @@ const ShotSuggestorWithTabs = () => {
 
       if (response.data && response.data.suggestions) {
         setShots(response.data.suggestions);
-        setSessionInfo(response.data.session_info);
-        showSnackbar('Shots generated successfully!');
+        if (response.data.session_info && response.data.session_info.session_id) {
+          setSessionInfo({ id: response.data.session_info.session_id });
+          console.log('New session created with ID:', response.data.session_info.session_id);
+        }
+        showSnackbar(`Generated ${response.data.suggestions.length} new shot ideas!`, 'success');
         
         // Refresh previous sessions to show the new session icon
         await loadPreviousSessions();
