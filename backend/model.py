@@ -351,17 +351,19 @@ async def gemini(scene_description: str, num_shots: int = 5) -> List[Dict[str, A
         prompt = f"""You are a professional cinematographer. For the following scene, suggest {num_shots} distinct camera shots.
         Scene: {scene_description}
 
-        IMPORTANT: Format your response EXACTLY like this example, with each shot on a new line:
-        1. Establishing Wide Shot: A sweeping view of the landscape, camera slowly panning left to right. This shot establishes the vast scale of the location and sets the mood for the scene.
-        2. Character Close-up: Character's intense expression, camera slightly low angle. This intimate shot captures the emotional intensity and determination of the character.
-        3. Two-shot Medium: Two characters in conversation, camera tracking their movement. This shot maintains visual connection between characters while showing their environment.
-        4. Over-the-shoulder Shot: Character's perspective looking at the scene, camera at eye level. This shot puts the audience in the character's shoes, creating an immersive experience.
-        5. Aerial Establishing: Birds-eye view of the entire location, camera slowly descending. This dramatic shot reveals the full scope of the setting and creates a sense of grandeur.
+        IMPORTANT: For each shot, provide a detailed, vivid, and cinematic description (2-3 sentences, up to 50 words). Do NOT use the word 'camera' in the description; instead, describe the movement or perspective (e.g., 'the view tilts up', 'the perspective glides forward').
+
+        Format your response EXACTLY like this example, with each shot on a new line:
+        1. Establishing Wide Shot: A sweeping view of the landscape, the view slowly pans left to right, revealing the vast scale of the location and setting the mood for the scene. The sunlight glimmers on the distant hills as the perspective glides over the terrain, immersing the audience in the environment.
+        2. Character Close-up: The character's intense expression is captured from a slightly low angle, highlighting their emotional intensity and determination. Subtle shifts in focus draw attention to the glistening tears in their eyes, making the moment deeply personal.
+        3. Two-shot Medium: Two characters in conversation, the view tracks their movement through a bustling marketplace, weaving between stalls and capturing the vibrant energy of the crowd. The background blurs as the perspective follows their animated gestures and shifting emotions.
+        4. Over-the-shoulder Shot: From behind the main character, the perspective looks out at the unfolding scene, placing the audience in the character's shoes. The view gently shifts to reveal key details in the environment, enhancing immersion and narrative depth.
+        5. Aerial Establishing: A bird's-eye view of the entire location, the perspective slowly descends, revealing the full scope of the setting and creating a sense of grandeur. The city lights twinkle below as the view glides over rooftops and winding streets.
 
         Each shot must include:
         - Shot number (1-{num_shots})
         - Shot name (e.g., "Establishing Wide Shot", "Character Close-up")
-        - Description of the shot and camera movement
+        - A detailed, cinematic description of the shot and movement (2-3 sentences, up to 50 words, do NOT use the word 'camera')
         - A brief explanation of why this shot is effective for the scene
         """
 
@@ -514,6 +516,19 @@ def extract_camera_movement(description: str) -> str:
     
     return "Static"  # Default to static if no movement detected
 
+def clean_shot_description(description: str) -> str:
+    """Replace 'camera [verb]' with 'the view [verb]' for image generation, preserving cinematic movement."""
+    import re
+    # Replace 'camera [verb]' or 'the camera [verb]' with 'the view [verb]'
+    description = re.sub(r'\b(the )?camera( is| was)? ([a-zA-Z]+ing)\b', r'the view\2 \3', description, flags=re.IGNORECASE)
+    # Replace 'camera' as a standalone word with 'the view'
+    description = re.sub(r'\bcamera\b', 'the view', description, flags=re.IGNORECASE)
+    # Clean up extra spaces
+    description = re.sub(r'\s+', ' ', description).strip()
+    # Remove leading/trailing punctuation left by removal
+    description = re.sub(r'^[,\s]+|[,\s]+$', '', description)
+    return description
+
 def generate_shot_image(
     prompt: str,
     model_name: str = "runwayml/stable-diffusion-v1-5",
@@ -524,6 +539,8 @@ def generate_shot_image(
 ) -> str:
     """Generate an image based on the shot description"""
     try:
+        # Clean the prompt to remove 'camera' mentions
+        prompt = clean_shot_description(prompt)
         logger.info(f"Starting image generation for prompt: '{prompt}' with model: {model_name}")
         
         # Check if model is initialized
